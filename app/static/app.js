@@ -60,7 +60,18 @@ function selectJob(jobId) {
   document.getElementById('result-view').classList.remove('hidden');
   document.getElementById('job-id-display').textContent = jobId.slice(0, 8);
   document.getElementById('input-section').classList.add('hidden');
+  document.getElementById('log-section').classList.add('hidden');
+  document.getElementById('cancel-btn').classList.remove('hidden');
   pollJob(jobId);
+}
+
+async function cancelJob(jobId) {
+  if (!confirm('Cancel this job?')) return;
+  try {
+    await api(`/api/jobs/${jobId}/cancel`, { method: 'POST' });
+  } catch (e) {
+    alert('Cancel failed: ' + e.message);
+  }
 }
 
 function pollJob(jobId) {
@@ -68,15 +79,44 @@ function pollJob(jobId) {
     try {
       const job = await api(`/api/jobs/${jobId}`);
       renderJob(job);
-      if (job.status === 'completed' || job.status === 'failed') {
+      const terminal = ['completed', 'failed', 'cancelled'].includes(job.status);
+      if (terminal) {
         if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        document.getElementById('cancel-btn').classList.add('hidden');
         loadJobs();
+        loadConversationLog(jobId);
       }
     } catch { /* ignore */ }
   }
   fetchJob();
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(fetchJob, 3000);
+}
+
+async function loadConversationLog(jobId) {
+  try {
+    const data = await api(`/api/jobs/${jobId}/log`);
+    const section = document.getElementById('log-section');
+    const content = document.getElementById('log-content');
+    const entries = data.log || [];
+    if (!entries.length) { section.classList.add('hidden'); return; }
+    section.classList.remove('hidden');
+    content.innerHTML = entries.map(e => {
+      const role = e.role || 'unknown';
+      const msg = escHtml(e.content || '');
+      let toolInfo = '';
+      if (e.tool_calls && e.tool_calls.length) {
+        toolInfo = '<div class="tool-info">🔧 ' + e.tool_calls.map(t =>
+          escHtml(t.name || '') + '(' + escHtml((t.args || '').slice(0, 60)) + ')'
+        ).join(', ') + '</div>';
+      }
+      return `<div class="log-entry ${role}">
+        <div class="role-label">${role}</div>
+        <div class="msg-content">${msg || '(empty)'}</div>
+        ${toolInfo}
+      </div>`;
+    }).join('');
+  } catch { /* ignore */ }
 }
 
 async function submitAnswer(jobId) {
@@ -213,6 +253,8 @@ function resetForm() {
   document.getElementById('form-view').classList.remove('hidden');
   document.getElementById('result-view').classList.add('hidden');
   document.getElementById('input-section').classList.add('hidden');
+  document.getElementById('log-section').classList.add('hidden');
+  document.getElementById('cancel-btn').classList.add('hidden');
   document.getElementById('prompt').value = '';
   document.getElementById('error-msg').classList.add('hidden');
   loadJobs();

@@ -32,8 +32,13 @@
       <div class="result-header">
         <h2>Job <span id="job-id-display"></span></h2>
         <span id="job-status-badge" class="badge">queued</span>
+        <button id="cancel-btn" class="btn-danger hidden" onclick="cancelJob(currentJobId)">Cancel</button>
       </div>
       <div id="job-details"></div>
+      <div id="log-section" class="hidden">
+        <h3>Agent Conversation</h3>
+        <div id="log-content"></div>
+      </div>
       <div id="input-section" class="hidden" style="margin-top:20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
         <label id="question-text" style="display:block;margin-bottom:8px;font-weight:500"></label>
         <div style="display:flex;gap:8px">

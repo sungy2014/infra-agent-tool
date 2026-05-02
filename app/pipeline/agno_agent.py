@@ -225,28 +225,34 @@ def _build_terraform_agent(config: Config) -> Agent:
         name="Terraform Generator",
         model=model,
         tools=[ask_user, write_terraform_file],
+        db=_build_db(),
         system_message_role="system",
         system_message=f"""You are a senior infrastructure engineer specializing in Terraform.
 
-The Git repository has already been cloned. Your job is ONLY to:
-1. Read the user's infrastructure request
-2. Generate Terraform code
-3. Write it to files using write_terraform_file
+You are given a complete infrastructure request. Generate and write the Terraform code immediately.
 
-Do NOT ask about GitHub URLs or Jenkins — those are handled automatically.
+Your job is ONLY to:
+1. Parse the user's request
+2. Generate Terraform code using sensible defaults for anything not specified
+3. Write files using write_terraform_file
+
+Do NOT ask the user for missing details — use defaults:
+- Region: us-east-1
+- Environment: production  
+- Tags: Name, Environment, ManagedBy
+
+Do NOT ask about GitHub URLs or Jenkins — those are handled by other steps.
 
 Rules:
 - Use Terraform >= 1.5 syntax with `required_providers` blocks
 - Write provider config, variables, resources, and outputs using write_terraform_file
 - One file per concern: provider.tf, variables.tf, <resource>.tf, outputs.tf
-- Use variables for anything configurable (region, names, tags)
-- Default to AWS provider, region us-east-1 unless specified otherwise
+- Use variables for things that should be configurable
+- Default to AWS provider ~> 5.0
 - Include security best practices: encryption, public access blocks
-- Tag all resources with Name, Environment, ManagedBy
 - NEVER use placeholder values like "CHANGEME"
 
-If you need more details (bucket name, region, instance type, etc.),
-call the ask_user tool and wait for the response before writing files.
+Only call ask_user if the user's request is truly ambiguous (e.g. they ask "create something" without specifying any resource type).
 
 {_load_skills()}""",
         markdown=True,
@@ -261,17 +267,57 @@ def _build_db():
     return PostgresDb(db_url=db_url)
 
 
+_conversation_logs: dict[str, list[dict]] = {}
+_agent_results: dict[str, dict] = {}
+
+
 def _make_terraform_step(config: Config):
     """Factory: returns a function step that runs the Terraform agent."""
 
     def terraform_step(step_input: StepInput) -> StepOutput:
         agent = _build_terraform_agent(config)
         result = agent.run(input=step_input.input)
+
+        log_entries = []
+        try:
+            msgs = getattr(result, "messages", None) or []
+            for m in msgs:
+                role = getattr(m, "role", "unknown")
+                content = getattr(m, "content", "") or ""
+                tc = getattr(m, "tool_calls", None)
+                entry = {"role": role, "content": str(content)[:500]}
+                if tc:
+                    parsed = []
+                    for t in tc:
+                        fn = t.get("function", {}) if isinstance(t, dict) else getattr(t, "function", {})
+                        parsed.append({"name": fn.get("name", ""), "args": str(fn.get("arguments", ""))[:80]})
+                    entry["tool_calls"] = parsed
+                log_entries.append(entry)
+        except Exception as exc:
+            log_entries.append({"role": "system", "content": f"log error: {exc}"})
+
+        job_id = _current_job_id()
+        if job_id and log_entries:
+            from app.db import upsert_job
+            try:
+                upsert_job(job_id, log=json.dumps(log_entries))
+                _conversation_logs[job_id] = log_entries
+            except Exception:
+                pass
+
         content = result.content if hasattr(result, "content") else str(result)
         return StepOutput(content=content)
 
     terraform_step.__name__ = "terraform_step"
     return terraform_step
+
+
+def get_conversation_log(job_id: str) -> list[dict]:
+    return _conversation_logs.get(job_id, [])
+
+
+def get_agent_result(job_id: str) -> Optional[dict]:
+    return _agent_results.get(job_id)
 
 
 def _build_workflow(config: Config) -> Workflow:
@@ -327,6 +373,11 @@ def run(config: Config, prompt: str, job_id: Optional[str] = None,
         "skip_jenkins": skip_jenkins,
     }
 
+    # Check for cancellation before starting
+    from app.job_manager import get_manager as get_jm
+    if get_jm().is_cancelled(job_id or ""):
+        return {"response": "Job was cancelled before execution", "repo_dir": REPO_DIR, "files": []}
+
     workflow = _build_workflow(config)
     result = workflow.run(input=enriched, additional_data=additional_data)
 
@@ -344,10 +395,13 @@ def run(config: Config, prompt: str, job_id: Optional[str] = None,
             if f.endswith(".tf")
         )
 
+    conv_log = _conversation_logs.get(job_id or "", [])
+
     return {
         "response": "\n\n".join(response_parts) if response_parts else (
             result.content if hasattr(result, "content") else str(result)
         ),
         "repo_dir": REPO_DIR,
         "files": files,
+        "conversation_log": conv_log,
     }

@@ -38,7 +38,8 @@ def _init_schema():
                 completed_at TEXT,
                 result TEXT,
                 error TEXT,
-                pending_question TEXT
+                pending_question TEXT,
+                log TEXT
             )
         """)
 

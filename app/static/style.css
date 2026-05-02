@@ -55,3 +55,15 @@ textarea:focus{outline:none;border-color:var(--accent)}
 .timeline .step-dot.fail{background:var(--danger)}
 .timeline .step-label{color:var(--text-muted)}
 #response-text{max-height:400px;overflow-y:auto}
+.btn-danger{padding:4px 12px;background:var(--danger);color:#fff;border:none;border-radius:var(--radius);font-size:12px;cursor:pointer;margin-left:auto}
+.btn-danger:hover{opacity:.9}
+#log-section{margin-top:20px}
+#log-section h3{font-size:14px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+.log-entry{padding:8px 12px;margin-bottom:4px;border-radius:var(--radius);font-size:13px;line-height:1.4;border-left:3px solid var(--border)}
+.log-entry.system{background:rgba(88,166,255,.08);border-color:var(--accent)}
+.log-entry.user{background:rgba(63,185,80,.08);border-color:var(--success)}
+.log-entry.assistant{background:rgba(210,153,34,.08);border-color:var(--warning)}
+.log-entry.tool{background:rgba(139,148,158,.08);border-color:var(--text-muted)}
+.log-entry .role-label{font-weight:600;font-size:11px;text-transform:uppercase;margin-bottom:4px}
+.log-entry .msg-content{white-space:pre-wrap;word-break:break-word}
+.log-entry .tool-info{font-size:11px;color:var(--text-muted);margin-top:2px}

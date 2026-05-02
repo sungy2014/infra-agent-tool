@@ -103,6 +103,7 @@ class JobResponse(BaseModel):
     result: Optional[dict] = None
     error: Optional[str] = None
     pending_question: Optional[str] = None
+    log: Optional[str] = None
 
 
 class InputRequest(BaseModel):
@@ -127,6 +128,32 @@ def get_job(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+@app.get("/api/jobs/{job_id}/log")
+def get_job_log(job_id: str):
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    result = job.get("result")
+    conv_log = None
+    if result and isinstance(result, dict):
+        conv_log = result.get("conversation_log")
+    if conv_log is None and job.get("log"):
+        try:
+            import json as j
+            conv_log = j.loads(job["log"])
+        except Exception:
+            conv_log = None
+    return {"log": conv_log or []}
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str):
+    ok = job_manager.cancel_job(job_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Job cannot be cancelled")
+    return {"status": "cancelled"}
 
 
 @app.post("/api/generate", status_code=202, response_model=GenerateResponse)
