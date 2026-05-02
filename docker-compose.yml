@@ -1,4 +1,19 @@
 services:
+  infra-agent:
+    build: .
+    container_name: infra-agent
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      JENKINS_URL: http://jenkins:8080
+    volumes:
+      - agent_repo:/app/repo
+      - agent_tmp:/app/tmp
+      - ~/.gitconfig:/root/.gitconfig:ro
+      - ~/.git-credentials:/root/.git-credentials:ro
+
   jenkins:
     image: jenkins/jenkins:lts
     container_name: jenkins-server
@@ -6,11 +21,10 @@ services:
     ports:
       - "8080:8080"
       - "50000:50000"
-    environment:
-      JENKINS_ADMIN_ID: admin
-      JENKINS_ADMIN_PASSWORD: admin123
     volumes:
       - jenkins_home:/var/jenkins_home
 
 volumes:
   jenkins_home:
+  agent_repo:
+  agent_tmp:
