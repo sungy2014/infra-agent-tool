@@ -20,8 +20,7 @@ def cli():
 @click.option("--jenkins-params", default=None, help="JSON dict of Jenkins build parameters")
 @click.option("--skip-git", is_flag=True, help="Skip git operations")
 @click.option("--skip-jenkins", is_flag=True, help="Skip Jenkins trigger")
-@click.option("--use-agno", is_flag=True, help="Use the Agno agent pipeline")
-def generate(prompt, commit_msg, jenkins_params, skip_git, skip_jenkins, use_agno):
+def generate(prompt, commit_msg, jenkins_params, skip_git, skip_jenkins):
     """Generate Terraform code, commit to GitHub, and trigger Jenkins."""
     config = Config()
     config.validate()
@@ -41,7 +40,6 @@ def generate(prompt, commit_msg, jenkins_params, skip_git, skip_jenkins, use_agn
             jenkins_parameters=params,
             skip_git=skip_git,
             skip_jenkins=skip_jenkins,
-            use_agno=use_agno,
         )
         click.echo(json.dumps(result, indent=2))
     except Exception as e:

@@ -141,19 +141,13 @@ function renderJob(job) {
     </div>`);
   }
 
-  // Timeline — works for both legacy (r.git/r.jenkins) and Workflow (r.response text) result shapes
+  // Timeline
   const hasFiles = r.files?.length > 0;
   const resp = r.response || "";
-  const legacyGit = (r.git || {}).status;
-  const legacyJen = (r.jenkins || {}).status;
-  const gitDone = legacyGit
-    ? legacyGit === 'success' || legacyGit === 'no_changes' || legacyGit === 'skipped'
-    : /Git:/.test(resp);
-  const jenDone = legacyJen
-    ? legacyJen === 'triggered' || legacyJen === 'skipped'
-    : /Jenkins:/.test(resp);
-  const gitSkip = legacyGit === 'skipped' || /Git: skipped/.test(resp);
-  const jenSkip = legacyJen === 'skipped' || /Jenkins: skipped/.test(resp);
+  const gitDone = /Git: committed/.test(resp) || /Git: no changes/.test(resp);
+  const jenDone = /Jenkins: triggered/.test(resp);
+  const gitSkip = /Git: skipped/.test(resp);
+  const jenSkip = /Jenkins: skipped/.test(resp);
   const steps = [
     { label: 'Generate Terraform code', done: hasFiles, skip: false },
     { label: 'Write files', done: hasFiles, skip: false },
@@ -201,7 +195,6 @@ async function submitJob() {
         prompt,
         skip_git: document.getElementById('skip-git').checked,
         skip_jenkins: document.getElementById('skip-jenkins').checked,
-        use_agno: document.getElementById('use-agno').checked,
       }),
     });
     selectJob(resp.job_id);

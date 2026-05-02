@@ -39,7 +39,6 @@ class GenerateRequest(BaseModel):
     jenkins_parameters: Optional[dict[str, str]] = None
     skip_git: bool = False
     skip_jenkins: bool = False
-    use_agno: bool = False
 
 
 class GenerateResponse(BaseModel):
@@ -99,7 +98,6 @@ def generate(req: GenerateRequest):
         jenkins_parameters=req.jenkins_parameters,
         skip_git=req.skip_git,
         skip_jenkins=req.skip_jenkins,
-        use_agno=req.use_agno,
     )
     return GenerateResponse(
         job_id=job_id,

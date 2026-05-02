@@ -21,30 +21,26 @@ User prompt ──► Infra Agent API ──► Clone repo ──► Generate Te
 │  └──────────────┘    └────────┬─────────┘    └──────────────────────┘  │
 │                               │                                         │
 │                    ┌──────────▼──────────────┐                          │
+│                    ┌─────────────────────────┐                          │
 │                    │   Pipeline Router       │                          │
 │                    │   (pipeline/core.py)    │                          │
-│                    │   use_agno? true/false  │                          │
-│                    └──────┬──────────┬───────┘                          │
-│                           │          │                                  │
-│              ┌────────────▼──┐  ┌────▼────────────┐                    │
-│              │  Agno Path    │  │  Legacy Path    │                    │
-│              │  (default)    │  │  (fallback)     │                    │
-│              └───────┬───────┘  └────┬────────────┘                    │
-│                      │               │                                  │
-└──────────────────────┼───────────────┼──────────────────────────────────┘
-                       │               │
-         ┌─────────────▼─────┐    ┌────▼────────────┐
-         │  Agno Workflow    │    │  Direct API     │
-         │                    │    │                 │
-         │  Step 1: Clone    │    │  llm.py         │
-         │  (function)       │    │  terraform_gen  │
-         │                   │    │  git_ops        │
-         │  Step 2: Generate │    │  jenkins_ops    │
-         │  (Agent + LLM)    │    │                 │
-         │                   │    └─────────────────┘
-         │  Step 3: Publish  │
-         │  (function)       │
-         └───────────────────┘
+│                    │   runs Agno Workflow    │                          │
+│                    └────────────┬────────────┘                          │
+│                                 │                                        │
+└─────────────────────────────────┼────────────────────────────────────────┘
+                                  │
+                    ┌─────────────▼──────────────┐
+                    │  Agno Workflow              │
+                    │                             │
+                    │  Step 1: Clone repo         │
+                    │  (function)                 │
+                    │                             │
+                    │  Step 2: Generate Terraform │
+                    │  (Agent + LLM)              │
+                    │                             │
+                    │  Step 3: Publish            │
+                    │  (function)                 │
+                    └─────────────────────────────┘
 ```
 
 ---
@@ -89,12 +85,10 @@ queued ──► running ──► completed
 
 ### Pipeline Router (`app/pipeline/core.py`)
 
-Routes to one of two execution paths:
+Runs the Agno Workflow pipeline:
 
 ```
-run_pipeline()
-  ├── use_agno=True  ──► _run_agno()     (Agno Workflow)
-  └── use_agno=False ──► _run_legacy()   (direct function calls)
+run_pipeline() ──► agno_agent.run() ──► Workflow.run()
 ```
 
 ---
@@ -155,29 +149,6 @@ All skill definitions from `skills/` are loaded and injected into the Terraform 
 
 ```python
 system_message=f"""...{_load_skills()}"""
-```
-
----
-
-## Legacy Pipeline (Direct API)
-
-Fallback path using direct OpenAI SDK calls (no Agno framework):
-
-```
-llm.generate_terraform(config, prompt)
-    │
-    ▼
-terraform_gen.run(config, prompt)
-    │  Parses LLM response with regex: ### filename.tf ──► ```hcl ...```
-    │  Writes .tf files to terraform/
-    ▼
-git_ops.run(config, terraform_dir, message)
-    │  git init, add, commit, push
-    ▼
-jenkins_ops.run(config, parameters)
-    │  POST /job/{name}/buildWithParameters
-    ▼
-return {terraform: ..., git: ..., jenkins: ...}
 ```
 
 ---
