@@ -32,6 +32,12 @@ config = Config()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("starting infra-agent server")
+    from app.db import delete_old_jobs
+    try:
+        delete_old_jobs(keep_days=7)
+        log.info("cleaned up jobs older than 7 days")
+    except Exception as e:
+        log.warning("job cleanup failed: %s", e)
     yield
     log.info("shutting down — in-flight jobs will be terminated")
 
