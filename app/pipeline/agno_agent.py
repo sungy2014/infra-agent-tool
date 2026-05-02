@@ -228,7 +228,12 @@ def _build_terraform_agent(config: Config) -> Agent:
         system_message_role="system",
         system_message=f"""You are a senior infrastructure engineer specializing in Terraform.
 
-Read the user's infrastructure request and generate production-quality Terraform code.
+The Git repository has already been cloned. Your job is ONLY to:
+1. Read the user's infrastructure request
+2. Generate Terraform code
+3. Write it to files using write_terraform_file
+
+Do NOT ask about GitHub URLs or Jenkins — those are handled automatically.
 
 Rules:
 - Use Terraform >= 1.5 syntax with `required_providers` blocks
@@ -255,6 +260,19 @@ def _build_db():
     return SqliteDb(db_file="tmp/infra_agent.db")
 
 
+def _make_terraform_step(config: Config):
+    """Factory: returns a function step that runs the Terraform agent."""
+
+    def terraform_step(step_input: StepInput) -> StepOutput:
+        agent = _build_terraform_agent(config)
+        result = agent.run(input=step_input.input)
+        content = result.content if hasattr(result, "content") else str(result)
+        return StepOutput(content=content)
+
+    terraform_step.__name__ = "terraform_step"
+    return terraform_step
+
+
 def _build_workflow(config: Config) -> Workflow:
     return Workflow(
         name="Infra Pipeline",
@@ -262,7 +280,7 @@ def _build_workflow(config: Config) -> Workflow:
         db=_build_db(),
         steps=[
             clone_repo_step,
-            _build_terraform_agent(config),
+            _make_terraform_step(config),
             publish_step,
         ],
     )
@@ -278,7 +296,23 @@ def run(config: Config, prompt: str, job_id: Optional[str] = None,
 
     repo_abs = os.path.abspath(REPO_DIR)
     if os.path.isdir(repo_abs):
-        shutil.rmtree(repo_abs)
+        for entry in os.listdir(repo_abs):
+            entry_path = os.path.join(repo_abs, entry)
+            if os.path.isfile(entry_path) or os.path.islink(entry_path):
+                os.remove(entry_path)
+            elif os.path.isdir(entry_path) and entry != ".git":
+                shutil.rmtree(entry_path)
+
+    # Enrich the prompt with environment configuration
+    enriched = prompt
+    if config.git_remote_url:
+        enriched += f"\n\nGit repository URL: {config.git_remote_url}\nGit branch: {config.git_branch}"
+    if not skip_jenkins and config.jenkins_url:
+        enriched += (
+            f"\n\nJenkins job to trigger: {config.jenkins_job_name}\n"
+            f"Jenkins URL: {config.jenkins_url}\n"
+            f"Jenkins user: {config.jenkins_user}"
+        )
 
     additional_data = {
         "remote_url": config.git_remote_url,
@@ -293,7 +327,7 @@ def run(config: Config, prompt: str, job_id: Optional[str] = None,
     }
 
     workflow = _build_workflow(config)
-    result = workflow.run(input=prompt, additional_data=additional_data)
+    result = workflow.run(input=enriched, additional_data=additional_data)
 
     response_parts = []
     if hasattr(result, "events") and result.events:
