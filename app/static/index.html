@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Infra Agent</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <h1>Infra Agent</h1>
+      <div id="server-status" class="status-dot" title="Checking..."></div>
+    </div>
+    <button id="new-btn" onclick="resetForm()">+ New Job</button>
+    <div id="job-list"><div class="empty-state">No jobs yet</div></div>
+  </aside>
+  <main>
+    <div id="form-view">
+      <h2>Generate Infrastructure</h2>
+      <p class="subtitle">Describe the infrastructure you want in natural language.</p>
+      <textarea id="prompt" rows="4" placeholder="e.g. create an AWS VPC with two public subnets and an EC2 instance"></textarea>
+      <div class="options">
+        <label><input type="checkbox" id="skip-git"> Skip git</label>
+        <label><input type="checkbox" id="skip-jenkins"> Skip Jenkins</label>
+        <label><input type="checkbox" id="use-agno" checked> Use Agno</label>
+      </div>
+      <button id="submit-btn" onclick="submitJob()">Generate</button>
+      <div id="error-msg" class="error hidden"></div>
+    </div>
+    <div id="result-view" class="hidden">
+      <div class="result-header">
+        <h2>Job <span id="job-id-display"></span></h2>
+        <span id="job-status-badge" class="badge">queued</span>
+      </div>
+      <div id="job-details"></div>
+      <div id="input-section" class="hidden" style="margin-top:20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+        <label id="question-text" style="display:block;margin-bottom:8px;font-weight:500"></label>
+        <div style="display:flex;gap:8px">
+          <input id="input-field" type="text" style="flex:1;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:14px" placeholder="Type your answer..." onkeydown="if(event.key==='Enter')submitAnswer(currentJobId)">
+          <button onclick="submitAnswer(currentJobId)" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);font-size:14px;cursor:pointer;white-space:nowrap">Send</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

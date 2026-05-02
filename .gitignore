@@ -1,0 +1,9 @@
+.env
+_repo/
+terraform/
+repo/
+tmp/
+*.pyc
+__pycache__/
+.envrc
+*.log
