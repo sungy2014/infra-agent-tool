@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 DB_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tmp")
-DB_PATH = os.path.join(DB_DIR, "infra_agent.db")
+DB_PATH = os.environ.get("INFRA_AGENT_DB_PATH") or os.path.join(DB_DIR, "infra_agent.db")
 
 _local = threading.local()
 

@@ -83,5 +83,5 @@ class JobManager:
     def get_job(self, job_id: str) -> Optional[dict]:
         return load_job(job_id)
 
-    def list_jobs(self) -> list[dict]:
-        return db_list_jobs()
+    def list_jobs(self, limit: int = 50) -> list[dict]:
+        return db_list_jobs(limit=limit)

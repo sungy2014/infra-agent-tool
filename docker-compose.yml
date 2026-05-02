@@ -9,6 +9,7 @@ services:
     environment:
       JENKINS_URL: http://jenkins:8080
       HOME: /app
+      INFRA_AGENT_DB_PATH: /tmp/infra_agent.db
     deploy:
       resources:
         limits:
@@ -18,7 +19,6 @@ services:
           memory: 256M
     volumes:
       - agent_repo:/app/repo
-      - agent_tmp:/app/tmp
       - ~/.gitconfig:/app/.gitconfig:ro
       - ~/.git-credentials:/app/.git-credentials:ro
 
@@ -35,4 +35,3 @@ services:
 volumes:
   jenkins_home:
   agent_repo:
-  agent_tmp:
