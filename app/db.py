@@ -71,6 +71,13 @@ def delete_job(job_id: str):
     _get_conn().commit()
 
 
+def delete_old_jobs(keep_days: int = 7):
+    import datetime
+    cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=keep_days)).isoformat()
+    _get_conn().execute("DELETE FROM jobs WHERE created_at < ? AND status IN ('completed', 'failed')", (cutoff,))
+    _get_conn().commit()
+
+
 def _row_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
     for field in ("result",):

@@ -8,11 +8,19 @@ services:
     env_file: .env
     environment:
       JENKINS_URL: http://jenkins:8080
+      HOME: /app
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          memory: 256M
     volumes:
       - agent_repo:/app/repo
       - agent_tmp:/app/tmp
-      - ~/.gitconfig:/root/.gitconfig:ro
-      - ~/.git-credentials:/root/.git-credentials:ro
+      - ~/.gitconfig:/app/.gitconfig:ro
+      - ~/.git-credentials:/app/.git-credentials:ro
 
   jenkins:
     image: jenkins/jenkins:lts

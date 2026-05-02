@@ -1,12 +1,12 @@
 const API = window.location.origin;
+const API_KEY = document.querySelector('meta[name="api-key"]')?.getAttribute('content') || '';
 let pollTimer = null;
 let currentJobId = null;
 
 async function api(path, opts = {}) {
-  const res = await fetch(API + path, {
-    headers: { 'Content-Type': 'application/json', ...opts.headers },
-    ...opts,
-  });
+  const headers = { 'Content-Type': 'application/json', ...opts.headers };
+  if (API_KEY) headers['Authorization'] = 'Bearer ' + API_KEY;
+  const res = await fetch(API + path, { headers, ...opts });
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`HTTP ${res.status}: ${body}`);

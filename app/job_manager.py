@@ -41,7 +41,10 @@ class JobManager:
         upsert_job(job_id, status="awaiting_input", pending_question=question)
         event = threading.Event()
         self._input_events[job_id] = event
-        event.wait()
+        waited = event.wait(timeout=600)
+        if not waited:
+            self._input_events.pop(job_id, None)
+            raise TimeoutError("User did not respond within 10 minutes")
         answer = self._input_data.pop(job_id, "")
         self._input_events.pop(job_id, None)
         upsert_job(job_id, status="running", pending_question=None)
