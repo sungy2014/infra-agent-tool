@@ -17,7 +17,7 @@ warnings.filterwarnings("ignore", message=".*OpenSSL.*")
 from app.config import Config
 from app.pipeline.core import run_pipeline
 from app.job_manager import JobManager, set_manager
-from app.db import list_jobs, delete_job
+from app.db import list_jobs
 
 logging.basicConfig(
     level=logging.INFO,

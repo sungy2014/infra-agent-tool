@@ -256,8 +256,9 @@ call the ask_user tool and wait for the response before writing files.
 
 
 def _build_db():
-    from agno.db.sqlite import SqliteDb
-    return SqliteDb(db_file="tmp/infra_agent.db")
+    from agno.db.postgres import PostgresDb
+    db_url = os.environ.get("DATABASE_URL", "postgresql://infra:infra@localhost:5432/infra")
+    return PostgresDb(db_url=db_url)
 
 
 def _make_terraform_step(config: Config):

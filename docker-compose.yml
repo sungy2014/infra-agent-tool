@@ -9,7 +9,7 @@ services:
     environment:
       JENKINS_URL: http://jenkins:8080
       HOME: /app
-      INFRA_AGENT_DB_PATH: /tmp/infra_agent.db
+      DATABASE_URL: postgresql://infra:infra@postgres:5432/infra
     deploy:
       resources:
         limits:
@@ -21,6 +21,27 @@ services:
       - agent_repo:/app/repo
       - ~/.gitconfig:/app/.gitconfig:ro
       - ~/.git-credentials:/app/.git-credentials:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: infra-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: infra
+      POSTGRES_PASSWORD: infra
+      POSTGRES_DB: infra
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U infra"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   jenkins:
     image: jenkins/jenkins:lts
@@ -35,3 +56,4 @@ services:
 volumes:
   jenkins_home:
   agent_repo:
+  pg_data:
