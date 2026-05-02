@@ -74,6 +74,19 @@ async function cancelJob(jobId) {
   }
 }
 
+async function transitionJob(jobId, newStatus) {
+  if (!newStatus) return;
+  try {
+    await api(`/api/jobs/${jobId}/transition`, {
+      method: 'POST',
+      body: JSON.stringify({ status: newStatus }),
+    });
+  } catch (e) {
+    alert('Transition failed: ' + e.message);
+    // reload current job to reset the selector
+  }
+}
+
 function pollJob(jobId) {
   async function fetchJob() {
     try {
@@ -131,8 +144,7 @@ async function submitAnswer(jobId) {
     });
     document.getElementById('input-section').classList.add('hidden');
   } catch (e) {
-    alert('Failed to submit: ' + e.message);
-  } finally {
+    // Job may have already completed (agent used defaults) — refresh view
     input.disabled = false;
     input.value = '';
   }
@@ -142,23 +154,40 @@ function renderJob(job) {
   document.getElementById('job-status-badge').className = `badge ${job.status}`;
   document.getElementById('job-status-badge').textContent = job.status;
 
+  // Status transition dropdown for terminal states
+  const sel = document.getElementById('status-select');
+  const terminal = ['completed', 'failed', 'cancelled'];
+  if (terminal.includes(job.status)) {
+    sel.classList.remove('hidden');
+    const targets = job.status === 'completed' ? ['failed'] :
+                    job.status === 'failed' ? ['queued', 'running'] :
+                    job.status === 'cancelled' ? ['queued'] : [];
+    sel.innerHTML = '<option value="">Change...</option>' +
+      targets.map(s => `<option value="${s}">to ${s}</option>`).join('');
+    sel.value = '';
+  } else {
+    sel.classList.add('hidden');
+  }
+
   const details = document.getElementById('job-details');
   const r = job.result || {};
   const parts = [];
 
-  // Pending question
+  // Pending question — preserve input field value across polls
   if (job.status === 'awaiting_input' && job.pending_question) {
     const inputSec = document.getElementById('input-section');
+    const inputField = document.getElementById('input-field');
+    const currentValue = inputField.value;
     inputSec.classList.remove('hidden');
     document.getElementById('question-text').textContent = job.pending_question;
-    document.getElementById('input-field').value = '';
-    document.getElementById('input-field').disabled = false;
-    document.getElementById('input-field').focus();
-
+    inputField.value = currentValue;
+    inputField.disabled = false;
     parts.push(`<div class="section">
       <h3>Question</h3>
       <div class="box" style="border-color:var(--warning)">${escHtml(job.pending_question)}</div>
     </div>`);
+  } else if (job.status === 'awaiting_input') {
+    document.getElementById('input-section').classList.remove('hidden');
   } else {
     document.getElementById('input-section').classList.add('hidden');
   }

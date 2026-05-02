@@ -156,6 +156,49 @@ def cancel_job(job_id: str):
     return {"status": "cancelled"}
 
 
+from pydantic import BaseModel  # already imported
+
+
+class TransitionRequest(BaseModel):
+    status: str
+    error: Optional[str] = None
+
+
+VALID_TRANSITIONS = {
+    "queued": ["running", "failed", "cancelled"],
+    "running": ["completed", "failed", "cancelled", "awaiting_input"],
+    "awaiting_input": ["running", "failed", "cancelled", "completed"],
+    "completed": ["failed"],
+    "failed": ["queued", "running"],
+    "cancelled": ["queued"],
+}
+
+
+@app.post("/api/jobs/{job_id}/transition")
+def transition_job(job_id: str, req: TransitionRequest):
+    from app.db import upsert_job
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    current = job.get("status", "")
+    allowed = VALID_TRANSITIONS.get(current, [])
+    if req.status not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot transition from '{current}' to '{req.status}'. Allowed: {allowed}",
+        )
+    import datetime
+    fields = {"status": req.status}
+    if req.status == "running":
+        fields["started_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    if req.status in ("completed", "failed", "cancelled"):
+        fields["completed_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    if req.error:
+        fields["error"] = req.error
+    upsert_job(job_id, **fields)
+    return {"status": req.status}
+
+
 @app.post("/api/generate", status_code=202, response_model=GenerateResponse)
 def generate(req: GenerateRequest):
     log.info("create job prompt=%.60s", req.prompt)

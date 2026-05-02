@@ -51,7 +51,8 @@ class JobManager:
             return False
         if job.get("status") in ("completed", "failed", "cancelled"):
             return False
-        self._cancel_events[job_id].set()
+        if job_id in self._cancel_events:
+            self._cancel_events[job_id].set()
         ev = self._input_events.get(job_id)
         if ev:
             ev.set()
