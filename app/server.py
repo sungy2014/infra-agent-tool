@@ -67,10 +67,13 @@ async def auth_middleware(request: Request, call_next):
 
 @app.get("/")
 def index():
+    import html as html_module
     from fastapi.responses import HTMLResponse
-    html = open(os.path.join(static_dir, "index.html")).read()
+    with open(os.path.join(static_dir, "index.html")) as f:
+        html = f.read()
     if API_KEY:
-        html = html.replace("</head>", f'<meta name="api-key" content="{API_KEY}"></head>')
+        safe_key = html_module.escape(API_KEY)
+        html = html.replace("</head>", f'<meta name="api-key" content="{safe_key}"></head>')
     return HTMLResponse(html)
 
 

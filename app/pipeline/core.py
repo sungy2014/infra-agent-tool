@@ -12,4 +12,9 @@ def run_pipeline(
     skip_jenkins: bool = False,
     job_id: Optional[str] = None,
 ) -> dict:
-    return agno_agent.run(config, prompt, job_id=job_id, skip_git=skip_git, skip_jenkins=skip_jenkins)
+    return agno_agent.run(
+        config, prompt, job_id=job_id,
+        commit_message=commit_message,
+        jenkins_parameters=jenkins_parameters,
+        skip_git=skip_git, skip_jenkins=skip_jenkins,
+    )

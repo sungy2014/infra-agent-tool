@@ -14,11 +14,11 @@ User prompt ──► Infra Agent API ──► Clone repo ──► Generate Te
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           FastAPI Server (:8000)                        │
 │                                                                         │
-│  ┌──────────────┐    ┌──────────────────┐    ┌──────────────────────┐  │
-│  │  REST API    │    │   JobManager     │    │   SQLite (persist)   │  │
-│  │  /api/*      │───►│   async queue    │───►│   tmp/infra_agent.db │  │
-│  │  /static/*   │    │   thread pool    │    │   - jobs table       │  │
-│  └──────────────┘    └────────┬─────────┘    └──────────────────────┘  │
+│  ┌──────────────┐    ┌──────────────────┐    ┌────────────────────────┐  │
+│  │  REST API    │    │   JobManager     │    │  PostgreSQL (persist)  │  │
+│  │  /api/*      │───►│   async queue    │───►│  infra_agent db        │  │
+│  │  /static/*   │    │   thread pool    │    │  - jobs table          │  │
+│  └──────────────┘    └────────┬─────────┘    └────────────────────────┘  │
 │                               │                                         │
 │                    ┌──────────▼──────────────┐                          │
 │                    ┌─────────────────────────┐                          │
@@ -74,14 +74,13 @@ queued ──► running ──► completed
 
 - Each job runs in a daemon thread
 - Interactive prompts use `threading.Event` to block/resume
-- All state persisted to SQLite via `app/db.py`
+- All state persisted to PostgreSQL via `app/db.py`
 
 ### Storage (`app/db.py`)
 
-- **SQLite** at `tmp/infra_agent.db` with WAL mode
-- Thread-local connections via `threading.local()`
-- Single `jobs` table: `job_id`, `status`, timestamps, `result` (JSON), `error`, `pending_question`
-- Agno's `SqliteDb` separately stores workflow session history
+- **PostgreSQL** via `psycopg2` with thread-local connections
+- Single `jobs` table: `job_id`, `status`, timestamps, `result` (JSON), `error`, `pending_question`, `log`
+- Agno's `PostgresDb` separately stores workflow session history
 
 ### Pipeline Router (`app/pipeline/core.py`)
 
@@ -177,7 +176,6 @@ Agent                    JobManager                    API/Browser
 
 ```
 skills/
-├── README.md                          # Reference
 ├── generate-terraform/SKILL.md        # TF generation rules
 ├── git-operations/SKILL.md            # Git commit conventions
 ├── jenkins-pipeline/SKILL.md          # Jenkins trigger rules

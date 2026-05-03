@@ -34,9 +34,9 @@ def _ensure_dir(path: str):
     pathlib.Path(path).mkdir(parents=True, exist_ok=True)
 
 
-def _run_cmd(cmd: list[str], cwd: str) -> str:
+def _run_cmd(cmd: list[str], cwd: str, timeout: int = 120) -> str:
     import subprocess
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{result.stderr}")
     return result.stdout.strip()
@@ -86,11 +86,23 @@ def write_terraform_file(filename: str, content: str) -> str:
 # Workflow steps
 # ---------------------------------------------------------------------------
 
+def _check_cancelled():
+    job_id = _current_job_id()
+    if job_id:
+        from app.job_manager import get_manager as get_jm
+        if get_jm().is_cancelled(job_id):
+            raise RuntimeError("Job was cancelled")
+
+
 def clone_repo_step(step_input: StepInput) -> StepOutput:
     """Step 1: Clone or pull the target GitHub repository."""
-    remote_url = step_input.additional_data.get("remote_url", "")
-    branch = step_input.additional_data.get("branch", "main")
+    _check_cancelled()
+    data = step_input.additional_data
+    remote_url = data.get("remote_url", "")
+    branch = data.get("branch", "main")
 
+    if data.get("skip_git"):
+        return StepOutput(content="Git: skipped")
     if not remote_url:
         return StepOutput(content="No remote URL provided, skipping clone.")
 
@@ -99,22 +111,32 @@ def clone_repo_step(step_input: StepInput) -> StepOutput:
 
     if os.path.isdir(git_dir):
         _run_cmd(["git", "checkout", branch], cwd)
+        _check_cancelled()
         _run_cmd(["git", "pull", "origin", branch], cwd)
         msg = f"Pulled latest from {remote_url}/{branch}"
     else:
+        # Remove contents (not the dir itself) so we can clone into it.
+        # The parent may be root-owned in Docker, so avoid shutil.rmtree(cwd).
         if os.path.isdir(cwd):
-            shutil.rmtree(cwd)
+            for entry in os.listdir(cwd):
+                entry_path = os.path.join(cwd, entry)
+                if os.path.isfile(entry_path) or os.path.islink(entry_path):
+                    os.remove(entry_path)
+                elif os.path.isdir(entry_path):
+                    shutil.rmtree(entry_path)
         _run_cmd(
-            ["git", "clone", "--branch", branch, remote_url, REPO_DIR],
-            os.path.dirname(os.path.abspath(REPO_DIR)),
+            ["git", "clone", "--branch", branch, remote_url, "."],
+            cwd,
         )
         msg = f"Cloned {remote_url} (branch: {branch})"
 
-    return StepOutput(content=msg, additional_data={"clone_status": "ok"})
+    _check_cancelled()
+    return StepOutput(content=msg)
 
 
 def publish_step(step_input: StepInput) -> StepOutput:
     """Step 3: Commit, push to GitHub, and trigger Jenkins."""
+    _check_cancelled()
     data = step_input.additional_data
     logs = []
 
@@ -126,8 +148,9 @@ def publish_step(step_input: StepInput) -> StepOutput:
         try:
             _run_cmd(["git", "add", "-A"], cwd)
             status = _run_cmd(["git", "status", "--porcelain"], cwd)
+            _check_cancelled()
             if status:
-                commit_msg = data.get("commit_message", "infra: Terraform update")
+                commit_msg = data.get("commit_message") or "infra: Terraform update"
                 branch = data.get("branch", "main")
                 _run_cmd(["git", "commit", "-m", commit_msg], cwd)
                 _run_cmd(["git", "push", "-u", "origin", branch], cwd)
@@ -139,6 +162,8 @@ def publish_step(step_input: StepInput) -> StepOutput:
     else:
         logs.append("Git: no remote URL configured, skipped")
 
+    _check_cancelled()
+
     # Jenkins trigger
     if data.get("skip_jenkins"):
         logs.append("Jenkins: skipped")
@@ -148,9 +173,10 @@ def publish_step(step_input: StepInput) -> StepOutput:
 
         job_url = f"{data['jenkins_url'].rstrip('/')}/job/{data['jenkins_job_name']}/buildWithParameters"
         auth = HTTPBasicAuth(data.get("jenkins_user", ""), data.get("jenkins_api_token", ""))
+        jenkins_params = data.get("jenkins_parameters")
 
         try:
-            resp = requests.post(job_url, auth=auth, timeout=30)
+            resp = requests.post(job_url, auth=auth, timeout=30, params=jenkins_params)
             if resp.status_code == 201:
                 location = resp.headers.get("Location", "unknown")
                 logs.append(f"Jenkins: triggered, queue: {location}")
@@ -275,6 +301,7 @@ def _make_terraform_step(config: Config):
     """Factory: returns a function step that runs the Terraform agent."""
 
     def terraform_step(step_input: StepInput) -> StepOutput:
+        _check_cancelled()
         agent = _build_terraform_agent(config)
         result = agent.run(input=step_input.input)
 
@@ -337,8 +364,12 @@ def _build_workflow(config: Config) -> Workflow:
 # Public API
 # ---------------------------------------------------------------------------
 
-def run(config: Config, prompt: str, job_id: Optional[str] = None,
-        skip_git: bool = False, skip_jenkins: bool = False) -> dict:
+def run(
+    config: Config, prompt: str, job_id: Optional[str] = None,
+    commit_message: Optional[str] = None,
+    jenkins_parameters: Optional[dict[str, str]] = None,
+    skip_git: bool = False, skip_jenkins: bool = False,
+) -> dict:
     _job_id_per_thread[threading.current_thread().ident] = job_id or ""
 
     repo_abs = os.path.abspath(REPO_DIR)
@@ -364,11 +395,12 @@ def run(config: Config, prompt: str, job_id: Optional[str] = None,
     additional_data = {
         "remote_url": config.git_remote_url,
         "branch": config.git_branch,
-        "commit_message": prompt,
+        "commit_message": commit_message or prompt,
         "jenkins_url": config.jenkins_url,
         "jenkins_job_name": config.jenkins_job_name,
         "jenkins_user": config.jenkins_user,
         "jenkins_api_token": config.jenkins_api_token,
+        "jenkins_parameters": jenkins_parameters,
         "skip_git": skip_git,
         "skip_jenkins": skip_jenkins,
     }
@@ -379,7 +411,12 @@ def run(config: Config, prompt: str, job_id: Optional[str] = None,
         return {"response": "Job was cancelled before execution", "repo_dir": REPO_DIR, "files": []}
 
     workflow = _build_workflow(config)
-    result = workflow.run(input=enriched, additional_data=additional_data)
+    try:
+        result = workflow.run(input=enriched, additional_data=additional_data)
+    finally:
+        # Clean up in-memory caches for this job
+        _conversation_logs.pop(job_id or "", None)
+        _agent_results.pop(job_id or "", None)
 
     response_parts = []
     if hasattr(result, "events") and result.events:
