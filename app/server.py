@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 import os
-import sys
-import uuid
+import json as jmod
 import logging
 import warnings
+import asyncio
 from typing import Optional
 from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 warnings.filterwarnings("ignore", message=".*OpenSSL.*")
@@ -67,13 +68,10 @@ async def auth_middleware(request: Request, call_next):
 
 @app.get("/")
 def index():
-    import html as html_module
     from fastapi.responses import HTMLResponse
-    with open(os.path.join(static_dir, "index.html")) as f:
-        html = f.read()
+    html = open(os.path.join(static_dir, "index.html")).read()
     if API_KEY:
-        safe_key = html_module.escape(API_KEY)
-        html = html.replace("</head>", f'<meta name="api-key" content="{safe_key}"></head>')
+        html = html.replace("</head>", f'<meta name="api-key" content="{API_KEY}"></head>')
     return HTMLResponse(html)
 
 
@@ -113,6 +111,21 @@ class InputRequest(BaseModel):
     answer: str
 
 
+class TransitionRequest(BaseModel):
+    status: str
+    error: Optional[str] = None
+
+
+VALID_TRANSITIONS = {
+    "queued": ["running", "failed", "cancelled"],
+    "running": ["completed", "failed", "cancelled", "awaiting_input"],
+    "awaiting_input": ["running", "failed", "cancelled", "completed"],
+    "completed": ["failed"],
+    "failed": ["queued", "running"],
+    "cancelled": ["queued"],
+}
+
+
 # --- Endpoints ---
 
 @app.get("/health")
@@ -144,11 +157,38 @@ def get_job_log(job_id: str):
         conv_log = result.get("conversation_log")
     if conv_log is None and job.get("log"):
         try:
-            import json as j
-            conv_log = j.loads(job["log"])
+            conv_log = jmod.loads(job["log"])
         except Exception:
             conv_log = None
     return {"log": conv_log or []}
+
+
+@app.get("/api/jobs/{job_id}/events")
+async def stream_events(job_id: str, index: int = 0):
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    from app.job_manager import get_events_since, _job_events
+
+    async def event_stream():
+        seen = index
+        terminal = {"completed", "failed", "cancelled"}
+        while True:
+            if job_id not in _job_events:
+                await asyncio.sleep(0.5)
+                continue
+            entries = get_events_since(job_id, seen)
+            for e in entries:
+                seen += 1
+                yield f"data: {jmod.dumps(e)}\n\n"
+            current = job_manager.get_job(job_id)
+            if current and current.get("status") in terminal:
+                yield "data: {\"type\":\"done\"}\n\n"
+                break
+            await asyncio.sleep(0.3)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/api/jobs/{job_id}/cancel")
@@ -157,24 +197,6 @@ def cancel_job(job_id: str):
     if not ok:
         raise HTTPException(status_code=400, detail="Job cannot be cancelled")
     return {"status": "cancelled"}
-
-
-from pydantic import BaseModel  # already imported
-
-
-class TransitionRequest(BaseModel):
-    status: str
-    error: Optional[str] = None
-
-
-VALID_TRANSITIONS = {
-    "queued": ["running", "failed", "cancelled"],
-    "running": ["completed", "failed", "cancelled", "awaiting_input"],
-    "awaiting_input": ["running", "failed", "cancelled", "completed"],
-    "completed": ["failed"],
-    "failed": ["queued", "running"],
-    "cancelled": ["queued"],
-}
 
 
 @app.post("/api/jobs/{job_id}/transition")

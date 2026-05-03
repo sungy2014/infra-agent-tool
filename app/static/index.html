@@ -18,9 +18,9 @@
   </aside>
   <main>
     <div id="form-view">
-      <h2>Generate Infrastructure</h2>
-      <p class="subtitle">Describe the infrastructure you want in natural language.</p>
-      <textarea id="prompt" rows="4" placeholder="e.g. create an AWS VPC with two public subnets and an EC2 instance"></textarea>
+      <h2>Describe your infrastructure</h2>
+      <p class="subtitle">Use natural language — the agent figures out the rest.</p>
+      <textarea id="prompt" rows="4" placeholder="e.g. an S3 bucket with versioning and encryption, or a VPC with public/private subnets and an EC2 instance..."></textarea>
       <div class="options">
         <label><input type="checkbox" id="skip-git"> Skip git</label>
         <label><input type="checkbox" id="skip-jenkins"> Skip Jenkins</label>
@@ -29,24 +29,21 @@
       <div id="error-msg" class="error hidden"></div>
     </div>
     <div id="result-view" class="hidden">
+      <div class="pipeline-bar" id="pipeline-bar">
+        <div class="pipe-node" data-pipe="clone"><div class="pipe-dot"></div><span>Clone</span></div>
+        <div class="pipe-connector"></div>
+        <div class="pipe-node" data-pipe="generate"><div class="pipe-dot"></div><span>Generate</span></div>
+        <div class="pipe-connector"></div>
+        <div class="pipe-node" data-pipe="publish"><div class="pipe-dot"></div><span>Publish</span></div>
+      </div>
       <div class="result-header">
         <h2>Job <span id="job-id-display"></span></h2>
         <span id="job-status-badge" class="badge">queued</span>
+        <span id="job-elapsed" style="font-size:12px;color:var(--text-muted);margin-left:8px"></span>
         <select id="status-select" class="status-select hidden" onchange="transitionJob(currentJobId, this.value)"></select>
         <button type="button" id="cancel-btn" class="btn-danger hidden" onclick="cancelJob(currentJobId)">Cancel</button>
       </div>
-      <div id="job-details"></div>
-      <div id="log-section" class="hidden">
-        <h3>Agent Conversation</h3>
-        <div id="log-content"></div>
-      </div>
-      <div id="input-section" class="hidden" style="margin-top:20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
-        <label id="question-text" style="display:block;margin-bottom:8px;font-weight:500"></label>
-        <div style="display:flex;gap:8px">
-          <input id="input-field" type="text" style="flex:1;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:14px" placeholder="Type your answer..." onkeydown="if(event.key==='Enter'){event.preventDefault();submitAnswer(currentJobId)}">
-          <button type="button" onclick="submitAnswer(currentJobId)" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);font-size:14px;cursor:pointer;white-space:nowrap">Send</button>
-        </div>
-      </div>
+      <div id="conversation-view"></div>
     </div>
   </main>
 </div>

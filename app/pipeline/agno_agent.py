@@ -395,9 +395,11 @@ def run(
     }
 
     # Check for cancellation before starting
-    from app.job_manager import get_manager as get_jm
+    from app.job_manager import get_manager as get_jm, emit_event
     if get_jm().is_cancelled(job_id or ""):
         return {"response": "Job was cancelled before execution", "repo_dir": REPO_DIR, "files": []}
+
+    emit_event(job_id, "step", {"label": "Cloning repository"})
 
     # Step 1: Clone repo
     step1_log = ""
@@ -408,15 +410,19 @@ def run(
                 additional_data=additional_data,
             ))
             step1_log = step1_result.content
+            emit_event(job_id, "step_done", {"label": "Clone", "detail": step1_log[:100]})
         except Exception as e:
             step1_log = f"Clone error: {e}"
+            emit_event(job_id, "step_error", {"label": "Clone", "error": str(e)})
+
+    emit_event(job_id, "step", {"label": "Generating Terraform code"})
 
     # Step 2: Run the Terraform agent directly
     agent = _build_terraform_agent(config)
     agent_result = agent.run(input=enriched)
     agent_content = agent_result.content if hasattr(agent_result, "content") else str(agent_result)
 
-    # Capture conversation log from agent result
+    # Capture and emit conversation log at once
     conv_log = []
     try:
         msgs = getattr(agent_result, "messages", None) or []
@@ -436,6 +442,7 @@ def run(
                     parsed.append({"name": name, "args": str(fn.get("arguments", ""))[:80]})
                 entry["tool_calls"] = parsed
             conv_log.append(entry)
+            emit_event(job_id, "message", entry)
         if job_id:
             from app.db import upsert_job
             try:
@@ -445,17 +452,24 @@ def run(
     except Exception as exc:
         conv_log.append({"role": "system", "content": f"log error: {exc}"})
 
+    emit_event(job_id, "step_done", {"label": "Terraform generation"})
+
     # Step 3: Publish (git push + Jenkins)
     step3_log = ""
     if not skip_git or not skip_jenkins:
+        emit_event(job_id, "step", {"label": "Publishing (git + Jenkins)"})
         try:
             step3_result = publish_step(StepInput(
                 input=enriched,
                 additional_data=additional_data,
             ))
             step3_log = step3_result.content
+            emit_event(job_id, "step_done", {"label": "Publish", "detail": step3_log[:100]})
         except Exception as e:
             step3_log = f"Publish error: {e}"
+            emit_event(job_id, "step_error", {"label": "Publish", "error": str(e)})
+
+    emit_event(job_id, "complete", {})
 
     files = []
     if os.path.isdir(REPO_DIR):

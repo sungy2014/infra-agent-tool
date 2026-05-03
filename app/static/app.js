@@ -1,7 +1,10 @@
 const API = window.location.origin;
 const API_KEY = document.querySelector('meta[name="api-key"]')?.getAttribute('content') || '';
-let pollTimer = null;
+let eventSource = null;
 let currentJobId = null;
+let eventCount = 0;
+let _detailsRendered = false;
+let _elapsedTimer = null;
 
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...opts.headers };
@@ -28,7 +31,7 @@ async function loadJobs() {
     const data = await api('/api/jobs');
     const list = document.getElementById('job-list');
     if (!data.jobs || data.jobs.length === 0) {
-      list.innerHTML = '<div class="empty-state">No jobs yet</div>';
+      list.innerHTML = '<div class="empty-state">No jobs yet — create one above</div>';
       return;
     }
     list.innerHTML = data.jobs
@@ -41,11 +44,12 @@ async function loadJobs() {
             ? j.result.response.split('\n')[0].slice(0, 60)
             : j.job_id.slice(0, 8);
         const active = j.job_id === currentJobId ? 'active' : '';
+        const elapsed = j.started_at && !j.completed_at ? ' · ' + timeAgo(j.started_at) : '';
         return `<div class="job-item ${active}" onclick="selectJob('${j.job_id}')">
           <div class="job-title">${escHtml(label)}</div>
           <div class="job-meta">
             <span class="badge ${j.status}">${j.status}</span>
-            <span>${timeAgo(j.created_at)}</span>
+            <span>${timeAgo(j.created_at)}${elapsed}</span>
           </div>
         </div>`;
       })
@@ -54,206 +58,336 @@ async function loadJobs() {
 }
 
 function selectJob(jobId) {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  _detailsRendered = false;
+  eventCount = 0;
   currentJobId = jobId;
   document.getElementById('form-view').classList.add('hidden');
   document.getElementById('result-view').classList.remove('hidden');
   document.getElementById('job-id-display').textContent = jobId.slice(0, 8);
-  document.getElementById('input-section').classList.add('hidden');
-  document.getElementById('log-section').classList.add('hidden');
+  removeInputPrompt();
+  startElapsedTimer();
   document.getElementById('cancel-btn').classList.remove('hidden');
-  pollJob(jobId);
+  document.getElementById('conversation-view').innerHTML =
+    `<div class="conv-status"><span class="badge queued">queued</span></div>
+     <div class="typing-indicator"><span></span><span></span><span></span><span class="typing-label">Starting...</span></div>
+     <div class="conv-divider">Steps</div>`;
+  connectEvents(jobId);
 }
 
-async function cancelJob(jobId) {
-  if (!confirm('Cancel this job?')) return;
-  try {
-    await api(`/api/jobs/${jobId}/cancel`, { method: 'POST' });
-  } catch (e) {
-    alert('Cancel failed: ' + e.message);
-  }
-}
+function connectEvents(jobId) {
+  if (eventSource) eventSource.close();
+  let url = `${API}/api/jobs/${jobId}/events?index=${eventCount}`;
+  const es = new EventSource(url);
+  eventSource = es;
 
-async function transitionJob(jobId, newStatus) {
-  if (!newStatus) return;
-  try {
-    await api(`/api/jobs/${jobId}/transition`, {
-      method: 'POST',
-      body: JSON.stringify({ status: newStatus }),
-    });
-  } catch (e) {
-    alert('Transition failed: ' + e.message);
-    // reload current job to reset the selector
-  }
-}
-
-function pollJob(jobId) {
-  async function fetchJob() {
+  es.onmessage = (event) => {
     try {
-      const job = await api(`/api/jobs/${jobId}`);
-      renderJob(job);
-      const terminal = ['completed', 'failed', 'cancelled'].includes(job.status);
-      if (terminal) {
-        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-        document.getElementById('cancel-btn').classList.add('hidden');
-        loadJobs();
-        loadConversationLog(jobId);
-      }
+      const ev = JSON.parse(event.data);
+      handleEvent(jobId, ev);
     } catch { /* ignore */ }
-  }
-  fetchJob();
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(fetchJob, 3000);
+  };
+
+  es.onerror = () => {
+    es.close();
+    eventSource = null;
+    if (!currentJobId || currentJobId !== jobId) return;
+    api(`/api/jobs/${jobId}`).then(job => {
+      if (!job || ['completed', 'failed', 'cancelled'].includes(job.status)) {
+        if (job && job.status === 'awaiting_input' && job.pending_question) {
+          showInputPrompt(job.pending_question);
+        }
+        return;
+      }
+      if (currentJobId === jobId) connectEvents(jobId);
+    }).catch(() => {});
+  };
 }
 
-async function loadConversationLog(jobId) {
-  try {
-    const data = await api(`/api/jobs/${jobId}/log`);
-    const section = document.getElementById('log-section');
-    const content = document.getElementById('log-content');
-    const entries = data.log || [];
-    if (!entries.length) { section.classList.add('hidden'); return; }
-    section.classList.remove('hidden');
-    content.innerHTML = entries.map(e => {
-      const role = e.role || 'unknown';
-      const msg = escHtml(e.content || '');
-      let extra = '';
-      if (e.reasoning) {
-        extra += `<details style="margin:4px 0"><summary style="font-size:12px;color:var(--accent);cursor:pointer">💭 thinking</summary>
-          <div style="font-size:12px;color:var(--text-muted);margin-top:4px;padding:6px;background:rgba(0,0,0,.2);border-radius:4px">${escHtml(e.reasoning)}</div></details>`;
+function updatePipeline(stepName, state) {
+  const map = { 'clone': /clone/i, 'generate': /generat|terraform/i, 'publish': /publish|jenkins/i };
+  let pipeKey = '';
+  for (const [k, re] of Object.entries(map)) {
+    if (re.test(stepName)) { pipeKey = k; break; }
+  }
+  if (!pipeKey) return;
+  const node = document.querySelector(`[data-pipe="${pipeKey}"]`);
+  if (!node) return;
+  const dot = node.querySelector('.pipe-dot');
+  node.classList.add('active');
+  // Mark previous connector as done
+  if (state === 'done' || state === 'running') {
+    const prev = node.previousElementSibling;
+    if (prev && prev.classList.contains('pipe-connector')) {
+      prev.classList.add(state === 'done' ? 'done' : 'active');
+    }
+  }
+  dot.className = 'pipe-dot ' + (state === 'running' ? 'running' : state === 'done' ? 'done' : state === 'error' ? 'fail' : '');
+}
+
+function handleEvent(jobId, ev) {
+  eventCount++;
+  const view = document.getElementById('conversation-view');
+  if (eventCount === 1) hideTypingIndicator();
+
+  if (ev.type === 'message') {
+    appendMessage(ev.data, view);
+  } else if (ev.type === 'step') {
+    updatePipeline(ev.data.label, 'running');
+    appendStep(ev.data.label, 'running', view);
+  } else if (ev.type === 'step_done') {
+    updatePipeline(ev.data.label, 'done');
+    appendStep(ev.data.label, 'done', view);
+  } else if (ev.type === 'step_error') {
+    updatePipeline(ev.data.label, 'error');
+    appendStep(ev.data.label, 'error', view);
+  } else if (ev.type === 'awaiting_input') {
+    showInputPrompt(ev.data.question);
+  } else if (ev.type === 'complete') {
+    hideTypingIndicator();
+    document.getElementById('cancel-btn').classList.add('hidden');
+    removeInputPrompt();
+    stopElapsedTimer();
+    loadJobs();
+    setTimeout(() => loadFullResult(jobId), 500);
+  }
+}
+
+function appendMessage(data, view) {
+  const role = data.role || 'unknown';
+  const msg = escHtml(data.content || '');
+  let extra = '';
+
+  if (data.reasoning) {
+    extra += `<details class="thinking-block"><summary>💭 thinking</summary><div>${escHtml(data.reasoning)}</div></details>`;
+  }
+  if (data.tool_calls) {
+    data.tool_calls.forEach(t => {
+      if (t.name === 'ask_user') {
+        extra += `<div class="conv-answer">❓ ${escHtml(t.args || '')}</div>`;
+      } else {
+        extra += `<div class="conv-toolcall">🔧 ${escHtml(t.name)}(${escHtml((t.args || '').slice(0, 100))})</div>`;
       }
-      if (e.user_answer) {
-        extra += `<div style="margin:4px 0;font-size:12px;color:var(--success)">👤 answer: ${escHtml(e.user_answer)}</div>`;
-      }
-      if (e.tool_calls && e.tool_calls.length) {
-        extra += '<div class="tool-info">🔧 ' + e.tool_calls.map(t => {
-          const label = t.name === 'ask_user' ? '❓ ask_user' : escHtml(t.name || 'tool');
-          return label + '(' + escHtml((t.args || '').slice(0, 60)) + ')';
-        }).join(', ') + '</div>';
-      }
-      return `<div class="log-entry ${role}">
-        <div class="role-label">${role}</div>
-        <div class="msg-content">${msg || '(empty)'}</div>
-        ${extra}
+    });
+  }
+  if (data.user_answer) {
+    extra += `<div class="conv-answer">👤 ${escHtml(data.user_answer)}</div>`;
+  }
+
+  const label = role === 'assistant' ? 'Agent' :
+                role === 'user' ? 'You' :
+                role === 'tool' ? 'Tool result' :
+                role === 'system' ? 'System' : role;
+
+  // Hide typing indicator before first real message
+  hideTypingIndicator();
+
+  view.insertAdjacentHTML('beforeend',
+    `<div class="conv-message conv-${role}">
+      <div class="conv-role">${label}</div>
+      <div class="conv-body${role === 'assistant' ? ' conv-assistant-body' : ''}">${msg || '(empty)'}</div>
+      ${extra}
+    </div>`
+  );
+  view.scrollTop = view.scrollHeight;
+}
+
+function appendStep(label, state, view) {
+  const existing = view.querySelector(`[data-step="${escHtml(label)}"]`);
+  if (existing) {
+    const dot = existing.querySelector('.step-dot');
+    const text = existing.querySelector('span');
+    if (state === 'done') {
+      dot.className = 'step-dot done';
+      text.innerHTML = '✅ ' + escHtml(label);
+    } else if (state === 'error') {
+      dot.className = 'step-dot fail';
+      text.innerHTML = '❌ ' + escHtml(label);
+    } else if (state === 'running') {
+      dot.className = 'step-dot running';
+      text.innerHTML = '⏳ ' + escHtml(label);
+    }
+    return;
+  }
+  const icon = state === 'done' ? '✅' : state === 'error' ? '❌' : state === 'running' ? '⏳' : '○';
+  view.insertAdjacentHTML('beforeend',
+    `<div class="conv-step" data-step="${escHtml(label)}">
+      <div class="step-dot ${state === 'done' ? 'done' : state === 'error' ? 'fail' : state === 'running' ? 'running' : ''}"></div>
+      <span>${icon} ${escHtml(label)}</span>
+    </div>`
+  );
+  view.scrollTop = view.scrollHeight;
+}
+
+function showInputPrompt(question) {
+  let el = document.getElementById('input-prompt');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'input-prompt';
+    el.className = 'hidden';
+    el.innerHTML = `
+      <span class="input-label"></span>
+      <div class="input-row">
+        <input type="text" placeholder="Type your answer..." onkeydown="if(event.key==='Enter'){event.preventDefault();submitAnswer(currentJobId)}">
+        <button type="button" onclick="submitAnswer(currentJobId)">Send</button>
       </div>`;
-    }).join('');
-  } catch { /* ignore */ }
+    document.getElementById('result-view').appendChild(el);
+  }
+  el.querySelector('.input-label').textContent = question || 'Please provide more details';
+  el.querySelector('input').value = '';
+  el.querySelector('input').disabled = false;
+  el.classList.remove('hidden');
+  setTimeout(() => el.querySelector('input').focus(), 100);
+
+  // Also append question to conversation
+  const view = document.getElementById('conversation-view');
+  view.insertAdjacentHTML('beforeend',
+    `<div class="conv-message conv-user">
+      <div class="conv-role">Question</div>
+      <div class="conv-body">${escHtml(question || '')}</div>
+    </div>`
+  );
+  view.scrollTop = view.scrollHeight;
+}
+
+function removeInputPrompt() {
+  const el = document.getElementById('input-prompt');
+  if (el) el.classList.add('hidden');
 }
 
 async function submitAnswer(jobId) {
-  const input = document.getElementById('input-field');
+  const el = document.getElementById('input-prompt');
+  if (!el) return;
+  const input = el.querySelector('input');
   const answer = input.value.trim();
   if (!answer) return;
   input.disabled = true;
   try {
-    await api(`/api/jobs/${jobId}/input`, {
-      method: 'POST',
-      body: JSON.stringify({ answer }),
-    });
-    document.getElementById('input-section').classList.add('hidden');
-  } catch (e) {
-    // Job may have already completed (agent used defaults) — refresh view
-    input.disabled = false;
-    input.value = '';
-  }
+    await api(`/api/jobs/${jobId}/input`, { method: 'POST', body: JSON.stringify({ answer }) });
+  } catch (e) { /* ignore */ }
+  const view = document.getElementById('conversation-view');
+  view.insertAdjacentHTML('beforeend',
+    `<div class="conv-message conv-user">
+      <div class="conv-role">You</div>
+      <div class="conv-body">${escHtml(answer)}</div>
+    </div>`
+  );
+  view.scrollTop = view.scrollHeight;
+  el.classList.add('hidden');
 }
 
-function renderJob(job) {
-  document.getElementById('job-status-badge').className = `badge ${job.status}`;
-  document.getElementById('job-status-badge').textContent = job.status;
+function showTypingIndicator(text) {
+  const view = document.getElementById('conversation-view');
+  const existing = view.querySelector('.typing-indicator');
+  if (existing) existing.querySelector('.typing-label').textContent = text || 'Thinking...';
+}
 
-  // Status transition dropdown for terminal states
+function hideTypingIndicator() {
+  const existing = document.querySelector('.typing-indicator');
+  if (existing) existing.remove();
+}
+
+function startElapsedTimer() {
+  stopElapsedTimer();
+  const el = document.getElementById('job-elapsed');
+  const start = Date.now();
+  _elapsedTimer = setInterval(() => {
+    const diff = Date.now() - start;
+    const s = Math.floor(diff / 1000);
+    const m = Math.floor(s / 60);
+    if (m > 0) el.textContent = m + 'm ' + (s % 60) + 's elapsed';
+    else el.textContent = s + 's elapsed';
+  }, 1000);
+}
+
+function stopElapsedTimer() {
+  if (_elapsedTimer) { clearInterval(_elapsedTimer); _elapsedTimer = null; }
+  document.getElementById('job-elapsed').textContent = '';
+}
+
+function loadFullResult(jobId) {
+  api(`/api/jobs/${jobId}`).then(j => renderFullDetails(j)).catch(() => {});
+}
+
+function renderFullDetails(job) {
+  if (_detailsRendered) return;
+  _detailsRendered = true;
+  const view = document.getElementById('conversation-view');
+  const r = job.result || {};
+
+  const statusEl = view.querySelector('.conv-status');
+  if (statusEl) statusEl.innerHTML = `<span class="badge ${job.status}">${job.status}</span>`;
+
+  // Mark all pipeline nodes as done
+  document.querySelectorAll('.pipe-node').forEach(node => {
+    const dot = node.querySelector('.pipe-dot');
+    if (!dot.classList.contains('done') && !dot.classList.contains('fail')) {
+      dot.className = 'pipe-dot done';
+      node.classList.add('active');
+    }
+    const prev = node.previousElementSibling;
+    if (prev && prev.classList.contains('pipe-connector') && !prev.classList.contains('done')) {
+      prev.classList.add('done');
+    }
+  });
+
+  // Mark all step dots as done since the job is finished
+  view.querySelectorAll('.conv-step').forEach(step => {
+    const dot = step.querySelector('.step-dot');
+    const span = step.querySelector('span');
+    const text = span ? span.textContent : '';
+    if (text.startsWith('✅') || text.startsWith('❌')) return;
+    if (dot.classList.contains('fail')) {
+      span.textContent = '❌ ' + text.replace(/^[✅❌⏳○]\s*/, '');
+    } else {
+      dot.className = 'step-dot done';
+      span.textContent = '✅ ' + text.replace(/^[✅❌⏳○]\s*/, '');
+    }
+  });
+
   const sel = document.getElementById('status-select');
   const terminal = ['completed', 'failed', 'cancelled'];
   if (terminal.includes(job.status)) {
     sel.classList.remove('hidden');
+    sel.innerHTML = '<option value="">Change status...</option>';
     const targets = job.status === 'completed' ? ['failed'] :
-                    job.status === 'failed' ? ['queued', 'running'] :
-                    job.status === 'cancelled' ? ['queued'] : [];
-    sel.innerHTML = '<option value="">Change...</option>' +
-      targets.map(s => `<option value="${s}">to ${s}</option>`).join('');
+                    job.status === 'failed' ? ['queued', 'running'] : ['queued'];
+    targets.forEach(s => sel.add(new Option('to ' + s, s)));
     sel.value = '';
-  } else {
-    sel.classList.add('hidden');
-  }
+  } else { sel.classList.add('hidden'); }
 
-  const details = document.getElementById('job-details');
-  const r = job.result || {};
-  const parts = [];
-
-  // Pending question — preserve input field value across polls
-  if (job.status === 'awaiting_input' && job.pending_question) {
-    const inputSec = document.getElementById('input-section');
-    const inputField = document.getElementById('input-field');
-    const currentValue = inputField.value;
-    inputSec.classList.remove('hidden');
-    document.getElementById('question-text').textContent = job.pending_question;
-    inputField.value = currentValue;
-    inputField.disabled = false;
-    parts.push(`<div class="section">
-      <h3>Question</h3>
-      <div class="box" style="border-color:var(--warning)">${escHtml(job.pending_question)}</div>
-    </div>`);
-  } else if (job.status === 'awaiting_input') {
-    document.getElementById('input-section').classList.remove('hidden');
-  } else {
-    document.getElementById('input-section').classList.add('hidden');
-  }
-
-  // Response / summary
-  if (r.response) {
-    parts.push(`<div class="section">
-      <h3>Response</h3>
-      <div class="box" id="response-text">${escHtml(r.response)}</div>
-    </div>`);
-  }
-
-  // Files
   if (r.files && r.files.length) {
-    parts.push(`<div class="section">
-      <h3>Files (${r.files.length})</h3>
-      <ul class="file-list">
-        ${r.files.map(f => `<li>${escHtml(f)}</li>`).join('')}
-      </ul>
-    </div>`);
+    view.insertAdjacentHTML('beforeend',
+      `<div class="conv-divider">Files (${r.files.length})</div>
+      <div class="conv-files">${r.files.map(f => '📄 ' + escHtml(f)).join('<br>')}</div>`
+    );
   }
 
-  // Timeline
-  const hasFiles = r.files?.length > 0;
-  const resp = r.response || "";
-  const gitDone = /Git: committed/.test(resp) || /Git: no changes/.test(resp);
-  const jenDone = /Jenkins: triggered/.test(resp);
-  const gitSkip = /Git: skipped/.test(resp);
-  const jenSkip = /Jenkins: skipped/.test(resp);
-  const steps = [
-    { label: 'Generate Terraform code', done: hasFiles, skip: false },
-    { label: 'Write files', done: hasFiles, skip: false },
-    { label: 'Git commit & push', done: gitDone, skip: gitSkip },
-    { label: 'Trigger Jenkins', done: jenDone, skip: jenSkip },
-  ];
-  parts.push(`<div class="section">
-    <h3>Timeline</h3>
-    <div class="timeline">
-      ${steps.map(s => `
-        <div class="step">
-          <div class="step-dot ${s.skip ? 'skip' : s.done ? 'done' : ''}"></div>
-          <div>
-            <div>${s.label}</div>
-            <div class="step-label">${s.skip ? 'skipped' : s.done ? 'done' : 'pending'}</div>
-          </div>
-        </div>`).join('')}
-    </div>
-  </div>`);
+  if (r.response) {
+    view.insertAdjacentHTML('beforeend',
+      `<div class="conv-divider">Summary</div>
+      <div class="conv-message conv-summary"><div class="conv-body">${escHtml(r.response)}</div></div>`
+    );
+  }
 
-  // Error
   if (job.error) {
-    parts.push(`<div class="section">
-      <h3>Error</h3>
-      <div class="box" style="color:var(--danger)">${escHtml(job.error)}</div>
-    </div>`);
+    view.insertAdjacentHTML('beforeend',
+      `<div class="conv-divider">Error</div>
+      <div class="conv-error">${escHtml(job.error)}</div>`
+    );
   }
 
-  details.innerHTML = parts.join('');
+  view.scrollTop = view.scrollHeight;
+}
+
+async function cancelJob(jobId) {
+  if (!confirm('Cancel this job?')) return;
+  try { await api(`/api/jobs/${jobId}/cancel`, { method: 'POST' }); } catch (e) { alert('Cancel failed: ' + e.message); }
+}
+
+async function transitionJob(jobId, newStatus) {
+  if (!newStatus) return;
+  try { await api(`/api/jobs/${jobId}/transition`, { method: 'POST', body: JSON.stringify({ status: newStatus }) }); } catch (e) { alert('Transition failed: ' + e.message); }
 }
 
 async function submitJob() {
@@ -264,7 +398,6 @@ async function submitJob() {
   err.classList.add('hidden');
   btn.disabled = true;
   btn.textContent = 'Submitting...';
-
   try {
     const resp = await api('/api/generate', {
       method: 'POST',
@@ -285,15 +418,20 @@ async function submitJob() {
 }
 
 function resetForm() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  _detailsRendered = false;
+  stopElapsedTimer();
+  removeInputPrompt();
+  // Reset pipeline bar
+  document.querySelectorAll('.pipe-node').forEach(n => { n.classList.remove('active'); n.querySelector('.pipe-dot').className = 'pipe-dot'; });
+  document.querySelectorAll('.pipe-connector').forEach(c => c.className = 'pipe-connector');
   currentJobId = null;
   document.getElementById('form-view').classList.remove('hidden');
   document.getElementById('result-view').classList.add('hidden');
-  document.getElementById('input-section').classList.add('hidden');
-  document.getElementById('log-section').classList.add('hidden');
   document.getElementById('cancel-btn').classList.add('hidden');
   document.getElementById('prompt').value = '';
   document.getElementById('error-msg').classList.add('hidden');
+  document.getElementById('conversation-view').innerHTML = '';
   loadJobs();
 }
 

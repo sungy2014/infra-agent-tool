@@ -3,6 +3,7 @@ import json
 import threading
 from datetime import datetime, timezone
 from typing import Callable, Optional
+from collections import defaultdict
 
 from app.db import upsert_job, load_job, list_jobs as db_list_jobs
 
@@ -20,6 +21,30 @@ def get_manager():
 def set_manager(mgr):
     global _default_manager
     _default_manager = mgr
+
+
+# Per-job event buffer for real-time streaming
+_job_events: dict[str, list[dict]] = defaultdict(list)
+_job_events_lock = threading.Lock()
+
+
+def emit_event(job_id: str, event_type: str, data: dict):
+    with _job_events_lock:
+        _job_events[job_id].append({
+            "type": event_type,
+            "data": data,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        })
+
+
+def get_events_since(job_id: str, index: int = 0) -> list[dict]:
+    with _job_events_lock:
+        return list(_job_events.get(job_id, []))[index:]
+
+
+def clear_events(job_id: str):
+    with _job_events_lock:
+        _job_events.pop(job_id, None)
 
 
 class JobManager:
@@ -65,6 +90,7 @@ class JobManager:
 
     def pause_for_input(self, job_id: str, question: str) -> str:
         upsert_job(job_id, status="awaiting_input", pending_question=question)
+        emit_event(job_id, "awaiting_input", {"question": question})
         event = threading.Event()
         self._input_events[job_id] = event
         waited = event.wait(timeout=600)
