@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Infra Agent — Login</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+.login-container{display:flex;height:100vh;align-items:center;justify-content:center;background:var(--bg)}
+.login-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:40px;width:380px;max-width:90vw}
+.login-box h1{font-size:22px;margin-bottom:4px;text-align:center}
+.login-box .subtitle{text-align:center;margin-bottom:28px;font-size:14px}
+.login-box label{display:block;font-size:13px;color:var(--text-muted);margin-bottom:4px;margin-top:16px}
+.login-box input{width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:14px;outline:none}
+.login-box input:focus{border-color:var(--accent)}
+.login-box button{width:100%;margin-top:24px;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);font-size:15px;font-weight:500;cursor:pointer}
+.login-box button:hover{opacity:.9}
+.login-box button:disabled{opacity:.5;cursor:not-allowed}
+.login-error{color:var(--danger);font-size:13px;margin-top:12px;text-align:center}
+</style>
+</head>
+<body>
+<div class="login-container">
+  <div class="login-box">
+    <h1>Infra Agent</h1>
+    <p class="subtitle">Sign in to continue</p>
+    <div id="login-error" class="login-error hidden"></div>
+    <label for="username">Username</label>
+    <input id="username" type="text" placeholder="admin" autocomplete="username">
+    <label for="password">Password</label>
+    <input id="password" type="password" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;" autocomplete="current-password" onkeydown="if(event.key==='Enter')login()">
+    <button id="login-btn" onclick="login()">Sign in</button>
+  </div>
+</div>
+<script>
+async function login() {
+  const user = document.getElementById('username').value.trim();
+  const pass = document.getElementById('password').value;
+  const btn = document.getElementById('login-btn');
+  const err = document.getElementById('login-error');
+  if (!user || !pass) { err.textContent = 'Enter username and password'; err.classList.remove('hidden'); return; }
+  btn.disabled = true; btn.textContent = 'Signing in...'; err.classList.add('hidden');
+  try {
+    const resp = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ username: user, password: pass }),
+    });
+    if (!resp.ok) { throw new Error('Invalid credentials'); }
+    const data = await resp.json();
+    localStorage.setItem('infra_agent_token', data.token);
+    localStorage.setItem('infra_agent_user', data.username);
+    window.location.href = '/';
+  } catch (e) {
+    err.textContent = e.message || 'Login failed';
+    err.classList.remove('hidden');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Sign in';
+  }
+}
+</script>
+</body>
+</html>

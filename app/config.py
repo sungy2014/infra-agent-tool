@@ -15,6 +15,11 @@ class Config:
     llm_base_url: str = field(default_factory=lambda: os.getenv("LLM_BASE_URL", ""))
     llm_reasoning_effort: str = field(default_factory=lambda: os.getenv("LLM_REASONING_EFFORT", ""))
 
+    auth_enabled: bool = field(default_factory=lambda: os.getenv("AUTH_ENABLED", "false").lower() == "true")
+    auth_username: str = field(default_factory=lambda: os.getenv("AUTH_USERNAME", "admin"))
+    auth_password: str = field(default_factory=lambda: os.getenv("AUTH_PASSWORD", "admin123"))
+    auth_secret: str = field(default_factory=lambda: os.getenv("AUTH_SECRET", "change-me-in-production"))
+
     git_remote_url: str = field(default_factory=lambda: os.getenv("GIT_REMOTE_URL", ""))
     git_branch: str = field(default_factory=lambda: os.getenv("GIT_BRANCH", "main"))
 

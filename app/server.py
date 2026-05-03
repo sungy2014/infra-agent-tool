@@ -4,13 +4,16 @@ import json as jmod
 import logging
 import warnings
 import asyncio
+import hashlib
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from contextlib import asynccontextmanager
 
+import jwt
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 warnings.filterwarnings("ignore", message=".*OpenSSL.*")
@@ -20,11 +23,7 @@ from app.pipeline.core import run_pipeline
 from app.job_manager import JobManager, set_manager
 from app.db import list_jobs
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%Y-%m-%dT%H:%M:%S")
 log = logging.getLogger("infra-agent")
 
 config = Config()
@@ -49,37 +48,99 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.isdir(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-API_KEY = os.getenv("INFRA_AGENT_API_KEY", "")
+
+# ── Auth ──────────────────────────────────────────────────────────────
+
+AUTH_ENABLED = config.auth_enabled
+AUTH_USER = config.auth_username
+AUTH_PASS = config.auth_password
+AUTH_SECRET = hashlib.sha256((config.auth_secret + "_infra_agent_salt").encode()).hexdigest()
+TOKEN_EXPIRY_HOURS = 24
+
+
+def create_token(username: str) -> str:
+    payload = {
+        "sub": username,
+        "iat": datetime.now(timezone.utc),
+        "exp": datetime.now(timezone.utc) + timedelta(hours=TOKEN_EXPIRY_HOURS),
+    }
+    return jwt.encode(payload, AUTH_SECRET, algorithm="HS256")
+
+
+def verify_token(token: str) -> Optional[str]:
+    try:
+        payload = jwt.decode(token, AUTH_SECRET, algorithms=["HS256"])
+        return payload.get("sub")
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
 
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    if not API_KEY:
+    if not AUTH_ENABLED:
         return await call_next(request)
-    if request.url.path in ("/health", "/", "/docs", "/openapi.json"):
-        return await call_next(request)
-    if request.url.path.startswith("/static/"):
-        return await call_next(request)
-    header = request.headers.get("Authorization", "")
-    if header != f"Bearer {API_KEY}":
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return await call_next(request)
 
+    public_paths = {"/login", "/api/auth/login", "/health", "/static/login.html", "/static/style.css"}
+    if request.url.path in public_paths or request.url.path.startswith("/static/"):
+        return await call_next(request)
+
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        username = verify_token(auth_header[7:])
+        if username:
+            return await call_next(request)
+
+    if request.url.path == "/":
+        return RedirectResponse(url="/login")
+
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+# ── Auth endpoints ────────────────────────────────────────────────────
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/auth/login")
+def login(req: LoginRequest):
+    if not AUTH_ENABLED:
+        return {"token": "", "username": req.username}
+    if req.username != AUTH_USER or req.password != AUTH_PASS:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = create_token(req.username)
+    return {"token": token, "username": req.username}
+
+
+@app.get("/login")
+def login_page():
+    path = os.path.join(static_dir, "login.html")
+    if os.path.isfile(path):
+        return HTMLResponse(open(path).read())
+    return HTMLResponse("<h1>Login page not found</h1>", status_code=404)
+
+
+# ── Frontend SPA ──────────────────────────────────────────────────────
 
 @app.get("/")
 def index():
-    from fastapi.responses import HTMLResponse
     html = open(os.path.join(static_dir, "index.html")).read()
-    if API_KEY:
-        html = html.replace("</head>", f'<meta name="api-key" content="{API_KEY}"></head>')
+    if AUTH_ENABLED:
+        # Inject auth config — frontend will redirect to /login if no token
+        pass
     return HTMLResponse(html)
 
+
+# ── Job Manager ───────────────────────────────────────────────────────
 
 job_manager = JobManager()
 set_manager(job_manager)
 
 
-# --- Request / Response models ---
+# ── Models ────────────────────────────────────────────────────────────
 
 class GenerateRequest(BaseModel):
     prompt: str
@@ -126,7 +187,7 @@ VALID_TRANSITIONS = {
 }
 
 
-# --- Endpoints ---
+# ── API Endpoints ─────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
@@ -168,7 +229,6 @@ async def stream_events(job_id: str, index: int = 0):
     job = job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-
     from app.job_manager import get_events_since, _job_events
 
     async def event_stream():
@@ -208,10 +268,7 @@ def transition_job(job_id: str, req: TransitionRequest):
     current = job.get("status", "")
     allowed = VALID_TRANSITIONS.get(current, [])
     if req.status not in allowed:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot transition from '{current}' to '{req.status}'. Allowed: {allowed}",
-        )
+        raise HTTPException(status_code=400, detail=f"Cannot transition from '{current}' to '{req.status}'")
     import datetime
     fields = {"status": req.status}
     if req.status == "running":
@@ -231,21 +288,12 @@ def generate(req: GenerateRequest):
         config.validate()
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
     job_id = job_manager.create_job(
-        func=run_pipeline,
-        config=config,
-        prompt=req.prompt,
-        commit_message=req.commit_message,
-        jenkins_parameters=req.jenkins_parameters,
-        skip_git=req.skip_git,
-        skip_jenkins=req.skip_jenkins,
+        func=run_pipeline, config=config, prompt=req.prompt,
+        commit_message=req.commit_message, jenkins_parameters=req.jenkins_parameters,
+        skip_git=req.skip_git, skip_jenkins=req.skip_jenkins,
     )
-    return GenerateResponse(
-        job_id=job_id,
-        status="queued",
-        status_url=f"/api/jobs/{job_id}",
-    )
+    return GenerateResponse(job_id=job_id, status="queued", status_url=f"/api/jobs/{job_id}")
 
 
 @app.post("/api/jobs/{job_id}/input")
@@ -256,13 +304,13 @@ def submit_input(job_id: str, req: InputRequest):
     return {"status": "ok"}
 
 
-# --- Entry point ---
+# ── Entry point ───────────────────────────────────────────────────────
 
 def main():
     host = os.getenv("SERVER_HOST", "0.0.0.0")
     port = int(os.getenv("SERVER_PORT", "8000"))
     reload = os.getenv("SERVER_RELOAD", "").lower() == "true"
-    log.info("listening on %s:%s", host, port)
+    log.info("listening on %s:%s auth=%s", host, port, AUTH_ENABLED)
     uvicorn.run("app.server:app", host=host, port=port, reload=reload)
 
 

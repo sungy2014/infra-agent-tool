@@ -1,5 +1,5 @@
 const API = window.location.origin;
-const API_KEY = document.querySelector('meta[name="api-key"]')?.getAttribute('content') || '';
+const API_KEY = localStorage.getItem('infra_agent_token') || '';
 let eventSource = null;
 let currentJobId = null;
 let eventCount = 0;
@@ -12,6 +12,12 @@ async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...opts.headers };
   if (API_KEY) headers['Authorization'] = 'Bearer ' + API_KEY;
   const res = await fetch(API + path, { headers, ...opts });
+  if (res.status === 401) {
+    localStorage.removeItem('infra_agent_token');
+    localStorage.removeItem('infra_agent_user');
+    window.location.href = '/login';
+    return;
+  }
   if (!res.ok) { const body = await res.text(); throw new Error(body); }
   return res.json();
 }
@@ -40,10 +46,13 @@ function updateStats() {
   const running = jobs.filter(j => j.status === 'running' || j.status === 'awaiting_input').length;
   const completed = jobs.filter(j => j.status === 'completed').length;
   const failed = jobs.filter(j => j.status === 'failed').length;
+  const user = localStorage.getItem('infra_agent_user') || '';
+  const logoutBtn = user ? `<span style="cursor:pointer;font-size:12px" onclick="logout()">🚪 logout</span>` : '';
   document.getElementById('sidebar-stats').innerHTML =
     `<div class="stat-row"><span>Running</span><span style="color:var(--accent)">${running}</span></div>
      <div class="stat-row"><span>Completed</span><span style="color:var(--success)">${completed}</span></div>
-     <div class="stat-row"><span>Failed</span><span style="color:var(--danger)">${failed}</span></div>`;
+     <div class="stat-row"><span>Failed</span><span style="color:var(--danger)">${failed}</span></div>
+     ${user ? `<div class="stat-row" style="margin-top:4px;border-top:1px solid var(--border);padding-top:4px"><span>${user}</span>${logoutBtn}</div>` : ''}`;
 }
 
 function renderSidebar() {
@@ -336,6 +345,7 @@ function renderFullDetails(job) {
 
 async function cancelJob(jobId) { if (!confirm('Cancel?')) return; try { await api(`/api/jobs/${jobId}/cancel`, { method: 'POST' }); } catch (e) { alert('Cancel failed: ' + e.message); } }
 async function transitionJob(jobId, ns) { if (!ns) return; try { await api(`/api/jobs/${jobId}/transition`, { method: 'POST', body: JSON.stringify({ status: ns }) }); } catch (e) { alert('Transition failed: ' + e.message); } }
+function logout() { localStorage.removeItem('infra_agent_token'); localStorage.removeItem('infra_agent_user'); window.location.href = '/login'; }
 
 async function submitJob() {
   const prompt = document.getElementById('prompt').value.trim(); if (!prompt) return;
