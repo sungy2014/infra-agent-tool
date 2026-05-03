@@ -98,6 +98,31 @@ textarea:focus{outline:none;border-color:var(--accent)}
 .reject-btn{padding:10px 24px;background:var(--danger);color:#fff;border:none;border-radius:var(--radius);font-size:15px;cursor:pointer;font-weight:600;flex:1}
 .reject-btn:hover{opacity:.9}
 
+/* Tabs */
+.tab-bar{display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid var(--border)}
+.tab-btn{padding:8px 20px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:14px;font-weight:500;cursor:pointer;transition:all .15s}
+.tab-btn:hover{color:var(--text)}
+.tab-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+/* Sidebar stats */
+#sidebar-stats{padding:8px 16px;font-size:11px;color:var(--text-muted);border-bottom:1px solid var(--border)}
+#sidebar-stats .stat-row{display:flex;justify-content:space-between;margin:2px 0}
+
+/* History table */
+.history-controls{display:flex;gap:12px;margin-bottom:16px}
+.history-controls input{flex:1;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:14px;outline:none}
+.history-controls input:focus{border-color:var(--accent)}
+.history-controls select{padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:14px;cursor:pointer}
+.history-table{width:100%;border-collapse:collapse;font-size:13px}
+.history-table th{text-align:left;padding:8px 12px;color:var(--text-muted);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)}
+.history-table td{padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer}
+.history-table tr:hover td{background:rgba(88,166,255,.05)}
+.history-table tr.active td{background:rgba(88,166,255,.1)}
+.history-table .td-id{font-family:SFMono-Regular,Consolas,monospace;font-size:12px}
+.history-table .td-action{color:var(--accent);cursor:pointer;font-size:12px}
+.history-table .td-action:hover{text-decoration:underline}
+.empty-table{padding:32px;text-align:center;color:var(--text-muted);font-size:14px}
+
 /* Pipeline bar */
 .pipeline-bar{display:flex;align-items:center;justify-content:center;gap:0;padding:12px 0;margin-bottom:16px;border-bottom:1px solid var(--border)}
 .pipe-node{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted)}

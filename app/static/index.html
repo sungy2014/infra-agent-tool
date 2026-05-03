@@ -13,37 +13,59 @@
       <h1>Infra Agent</h1>
       <div id="server-status" class="status-dot" title="Checking..."></div>
     </div>
+    <div id="sidebar-stats"></div>
     <button type="button" id="new-btn" onclick="resetForm()">+ New Job</button>
     <div id="job-list"><div class="empty-state">No jobs yet</div></div>
   </aside>
   <main>
-    <div id="form-view">
-      <h2>Describe your infrastructure</h2>
-      <p class="subtitle">Use natural language — the agent figures out the rest.</p>
-      <textarea id="prompt" rows="4" placeholder="e.g. an S3 bucket with versioning and encryption, or a VPC with public/private subnets and an EC2 instance..."></textarea>
-      <div class="options">
-        <label><input type="checkbox" id="skip-git"> Skip git</label>
-        <label><input type="checkbox" id="skip-jenkins"> Skip Jenkins</label>
-      </div>
-      <button type="button" id="submit-btn" onclick="submitJob()">Generate</button>
-      <div id="error-msg" class="error hidden"></div>
+    <div class="tab-bar" id="main-tabs">
+      <button type="button" class="tab-btn active" onclick="showTab('generate')">Generate</button>
+      <button type="button" class="tab-btn" onclick="showTab('history')">History</button>
     </div>
-    <div id="result-view" class="hidden">
-      <div class="pipeline-bar" id="pipeline-bar">
-        <div class="pipe-node" data-pipe="clone"><div class="pipe-dot"></div><span>Clone</span></div>
-        <div class="pipe-connector"></div>
-        <div class="pipe-node" data-pipe="generate"><div class="pipe-dot"></div><span>Generate</span></div>
-        <div class="pipe-connector"></div>
-        <div class="pipe-node" data-pipe="publish"><div class="pipe-dot"></div><span>Publish</span></div>
+    <div id="tab-generate">
+      <div id="form-view">
+        <h2>Describe your infrastructure</h2>
+        <p class="subtitle">Use natural language — the agent figures out the rest.</p>
+        <textarea id="prompt" rows="4" placeholder="e.g. an S3 bucket with versioning and encryption, or a VPC with public/private subnets..."></textarea>
+        <div class="options">
+          <label><input type="checkbox" id="skip-git"> Skip git</label>
+          <label><input type="checkbox" id="skip-jenkins"> Skip Jenkins</label>
+        </div>
+        <button type="button" id="submit-btn" onclick="submitJob()">Generate</button>
+        <div id="error-msg" class="error hidden"></div>
       </div>
-      <div class="result-header">
-        <h2>Job <span id="job-id-display"></span></h2>
-        <span id="job-status-badge" class="badge">queued</span>
-        <span id="job-elapsed" style="font-size:12px;color:var(--text-muted);margin-left:8px"></span>
-        <select id="status-select" class="status-select hidden" onchange="transitionJob(currentJobId, this.value)"></select>
-        <button type="button" id="cancel-btn" class="btn-danger hidden" onclick="cancelJob(currentJobId)">Cancel</button>
+      <div id="result-view" class="hidden">
+        <div class="pipeline-bar" id="pipeline-bar">
+          <div class="pipe-node" data-pipe="clone"><div class="pipe-dot"></div><span>Clone</span></div>
+          <div class="pipe-connector"></div>
+          <div class="pipe-node" data-pipe="generate"><div class="pipe-dot"></div><span>Generate</span></div>
+          <div class="pipe-connector"></div>
+          <div class="pipe-node" data-pipe="publish"><div class="pipe-dot"></div><span>Publish</span></div>
+        </div>
+        <div class="result-header">
+          <h2>Job <span id="job-id-display"></span></h2>
+          <span id="job-status-badge" class="badge">queued</span>
+          <span id="job-elapsed" style="font-size:12px;color:var(--text-muted);margin-left:8px"></span>
+          <select id="status-select" class="status-select hidden" onchange="transitionJob(currentJobId, this.value)"></select>
+          <button type="button" id="cancel-btn" class="btn-danger hidden" onclick="cancelJob(currentJobId)">Cancel</button>
+        </div>
+        <div id="conversation-view"></div>
       </div>
-      <div id="conversation-view"></div>
+    </div>
+    <div id="tab-history" class="hidden">
+      <div class="history-controls">
+        <input type="text" id="history-search" placeholder="Search jobs..." oninput="renderHistory()">
+        <select id="history-filter" onchange="renderHistory()">
+          <option value="">All status</option>
+          <option value="queued">Queued</option>
+          <option value="running">Running</option>
+          <option value="awaiting_input">Awaiting input</option>
+          <option value="completed">Completed</option>
+          <option value="failed">Failed</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </div>
+      <div id="history-table"></div>
     </div>
   </main>
 </div>
