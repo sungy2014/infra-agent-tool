@@ -117,16 +117,24 @@ async function loadConversationLog(jobId) {
     content.innerHTML = entries.map(e => {
       const role = e.role || 'unknown';
       const msg = escHtml(e.content || '');
-      let toolInfo = '';
+      let extra = '';
+      if (e.reasoning) {
+        extra += `<details style="margin:4px 0"><summary style="font-size:12px;color:var(--accent);cursor:pointer">💭 thinking</summary>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:4px;padding:6px;background:rgba(0,0,0,.2);border-radius:4px">${escHtml(e.reasoning)}</div></details>`;
+      }
+      if (e.user_answer) {
+        extra += `<div style="margin:4px 0;font-size:12px;color:var(--success)">👤 answer: ${escHtml(e.user_answer)}</div>`;
+      }
       if (e.tool_calls && e.tool_calls.length) {
-        toolInfo = '<div class="tool-info">🔧 ' + e.tool_calls.map(t =>
-          escHtml(t.name || '') + '(' + escHtml((t.args || '').slice(0, 60)) + ')'
-        ).join(', ') + '</div>';
+        extra += '<div class="tool-info">🔧 ' + e.tool_calls.map(t => {
+          const label = t.name === 'ask_user' ? '❓ ask_user' : escHtml(t.name || 'tool');
+          return label + '(' + escHtml((t.args || '').slice(0, 60)) + ')';
+        }).join(', ') + '</div>';
       }
       return `<div class="log-entry ${role}">
         <div class="role-label">${role}</div>
         <div class="msg-content">${msg || '(empty)'}</div>
-        ${toolInfo}
+        ${extra}
       </div>`;
     }).join('');
   } catch { /* ignore */ }

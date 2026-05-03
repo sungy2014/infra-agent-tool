@@ -42,6 +42,13 @@ def _init_schema():
                 log TEXT
             )
         """)
+        # Migration: add log column if table already existed without it
+        try:
+            cur.execute("SELECT log FROM jobs LIMIT 1")
+        except Exception:
+            conn.rollback()
+            cur.execute("ALTER TABLE jobs ADD COLUMN log TEXT")
+            conn.commit()
 
 
 def load_job(job_id: str) -> Optional[dict]:

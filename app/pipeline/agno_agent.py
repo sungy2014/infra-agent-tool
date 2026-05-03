@@ -61,7 +61,11 @@ def ask_user(question: str) -> str:
         question: The question to ask the user
     """
     from app.job_manager import get_manager as get_jm
-    return get_jm().pause_for_input(_current_job_id(), question)
+    job_id = _current_job_id()
+    answer = get_jm().pause_for_input(job_id, question)
+    if job_id:
+        _user_answers.setdefault(job_id, []).append(answer)
+    return answer
 
 
 @tool(show_result=True)
@@ -290,11 +294,14 @@ Only call ask_user if the user's request is truly ambiguous (e.g. they ask "crea
 def _build_db():
     from agno.db.postgres import PostgresDb
     db_url = os.environ.get("DATABASE_URL", "postgresql://infra:infra@localhost:5432/infra")
-    return PostgresDb(db_url=db_url)
+    db = PostgresDb(db_url=db_url)
+    _ = db.create_schema  # property — triggers table creation
+    return db
 
 
 _conversation_logs: dict[str, list[dict]] = {}
 _agent_results: dict[str, dict] = {}
+_user_answers: dict[str, list[str]] = {}
 
 
 def _make_terraform_step(config: Config):
@@ -306,18 +313,27 @@ def _make_terraform_step(config: Config):
         result = agent.run(input=step_input.input)
 
         log_entries = []
+        answer_idx = 0
+        user_ans = _user_answers.get(_current_job_id() or "", [])
         try:
             msgs = getattr(result, "messages", None) or []
             for m in msgs:
                 role = getattr(m, "role", "unknown")
                 content = getattr(m, "content", "") or ""
                 tc = getattr(m, "tool_calls", None)
+                rc = getattr(m, "reasoning_content", None)
                 entry = {"role": role, "content": str(content)[:500]}
+                if rc:
+                    entry["reasoning"] = str(rc)[:300]
                 if tc:
                     parsed = []
                     for t in tc:
                         fn = t.get("function", {}) if isinstance(t, dict) else getattr(t, "function", {})
-                        parsed.append({"name": fn.get("name", ""), "args": str(fn.get("arguments", ""))[:80]})
+                        name = fn.get("name", "")
+                        if name == "ask_user" and answer_idx < len(user_ans):
+                            entry["user_answer"] = user_ans[answer_idx]
+                            answer_idx += 1
+                        parsed.append({"name": name, "args": str(fn.get("arguments", ""))[:80]})
                     entry["tool_calls"] = parsed
                 log_entries.append(entry)
         except Exception as exc:
@@ -331,33 +347,6 @@ def _make_terraform_step(config: Config):
                 _conversation_logs[job_id] = log_entries
             except Exception:
                 pass
-
-        content = result.content if hasattr(result, "content") else str(result)
-        return StepOutput(content=content)
-
-    terraform_step.__name__ = "terraform_step"
-    return terraform_step
-
-
-def get_conversation_log(job_id: str) -> list[dict]:
-    return _conversation_logs.get(job_id, [])
-
-
-def get_agent_result(job_id: str) -> Optional[dict]:
-    return _agent_results.get(job_id)
-
-
-def _build_workflow(config: Config) -> Workflow:
-    return Workflow(
-        name="Infra Pipeline",
-        description="Clone repo → Generate Terraform → Publish & Jenkins",
-        db=_build_db(),
-        steps=[
-            clone_repo_step,
-            _make_terraform_step(config),
-            publish_step,
-        ],
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -410,19 +399,63 @@ def run(
     if get_jm().is_cancelled(job_id or ""):
         return {"response": "Job was cancelled before execution", "repo_dir": REPO_DIR, "files": []}
 
-    workflow = _build_workflow(config)
-    try:
-        result = workflow.run(input=enriched, additional_data=additional_data)
-    finally:
-        # Clean up in-memory caches for this job
-        _conversation_logs.pop(job_id or "", None)
-        _agent_results.pop(job_id or "", None)
+    # Step 1: Clone repo
+    step1_log = ""
+    if config.git_remote_url and not skip_git:
+        try:
+            step1_result = clone_repo_step(StepInput(
+                input=enriched,
+                additional_data=additional_data,
+            ))
+            step1_log = step1_result.content
+        except Exception as e:
+            step1_log = f"Clone error: {e}"
 
-    response_parts = []
-    if hasattr(result, "events") and result.events:
-        for event in result.events:
-            if hasattr(event, "content") and event.content:
-                response_parts.append(str(event.content))
+    # Step 2: Run the Terraform agent directly
+    agent = _build_terraform_agent(config)
+    agent_result = agent.run(input=enriched)
+    agent_content = agent_result.content if hasattr(agent_result, "content") else str(agent_result)
+
+    # Capture conversation log from agent result
+    conv_log = []
+    try:
+        msgs = getattr(agent_result, "messages", None) or []
+        for m in msgs:
+            role = getattr(m, "role", "unknown")
+            content = str(getattr(m, "content", "") or "")[:500]
+            rc = getattr(m, "reasoning_content", None)
+            tc = getattr(m, "tool_calls", None)
+            entry = {"role": role, "content": content}
+            if rc:
+                entry["reasoning"] = str(rc)[:300]
+            if tc:
+                parsed = []
+                for t in tc:
+                    fn = t.get("function", {}) if isinstance(t, dict) else getattr(t, "function", {})
+                    name = fn.get("name", "")
+                    parsed.append({"name": name, "args": str(fn.get("arguments", ""))[:80]})
+                entry["tool_calls"] = parsed
+            conv_log.append(entry)
+        if job_id:
+            from app.db import upsert_job
+            try:
+                upsert_job(job_id, log=json.dumps(conv_log))
+            except Exception:
+                pass
+    except Exception as exc:
+        conv_log.append({"role": "system", "content": f"log error: {exc}"})
+
+    # Step 3: Publish (git push + Jenkins)
+    step3_log = ""
+    if not skip_git or not skip_jenkins:
+        try:
+            step3_result = publish_step(StepInput(
+                input=enriched,
+                additional_data=additional_data,
+            ))
+            step3_log = step3_result.content
+        except Exception as e:
+            step3_log = f"Publish error: {e}"
 
     files = []
     if os.path.isdir(REPO_DIR):
@@ -432,12 +465,8 @@ def run(
             if f.endswith(".tf")
         )
 
-    conv_log = _conversation_logs.get(job_id or "", [])
-
     return {
-        "response": "\n\n".join(response_parts) if response_parts else (
-            result.content if hasattr(result, "content") else str(result)
-        ),
+        "response": "\n".join(filter(None, [step1_log, agent_content, step3_log])),
         "repo_dir": REPO_DIR,
         "files": files,
         "conversation_log": conv_log,
