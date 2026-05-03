@@ -93,6 +93,10 @@ textarea:focus{outline:none;border-color:var(--accent)}
 #input-prompt input:focus{border-color:var(--accent)}
 #input-prompt button{padding:10px 20px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);font-size:14px;cursor:pointer;white-space:nowrap;font-weight:500}
 #input-prompt button:hover{opacity:.9}
+.approve-btn{padding:10px 24px;background:var(--success);color:#fff;border:none;border-radius:var(--radius);font-size:15px;cursor:pointer;font-weight:600;flex:1}
+.approve-btn:hover{opacity:.9}
+.reject-btn{padding:10px 24px;background:var(--danger);color:#fff;border:none;border-radius:var(--radius);font-size:15px;cursor:pointer;font-weight:600;flex:1}
+.reject-btn:hover{opacity:.9}
 
 /* Pipeline bar */
 .pipeline-bar{display:flex;align-items:center;justify-content:center;gap:0;padding:12px 0;margin-bottom:16px;border-bottom:1px solid var(--border)}

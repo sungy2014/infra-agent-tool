@@ -143,6 +143,18 @@ function handleEvent(jobId, ev) {
     appendStep(ev.data.label, 'error', view);
   } else if (ev.type === 'awaiting_input') {
     showInputPrompt(ev.data.question);
+  } else if (ev.type === 'approval_required') {
+    showApprovalPrompt(ev.data, jobId);
+  } else if (ev.type === 'commit') {
+    const d = ev.data || {};
+    const link = d.url ? `<a href="${escHtml(d.url)}" target="_blank" style="color:var(--accent);text-decoration:none">${escHtml(d.hash)}</a>` : escHtml(d.hash || '');
+    view.insertAdjacentHTML('beforeend',
+      `<div class="conv-message conv-tool">
+        <div class="conv-role">Git commit</div>
+        <div class="conv-body">📝 ${escHtml(d.message || '')}<br>🔗 ${link} on <strong>${escHtml(d.branch || '')}</strong></div>
+      </div>`
+    );
+    view.scrollTop = view.scrollHeight;
   } else if (ev.type === 'complete') {
     hideTypingIndicator();
     document.getElementById('cancel-btn').classList.add('hidden');
@@ -253,6 +265,55 @@ function showInputPrompt(question) {
 function removeInputPrompt() {
   const el = document.getElementById('input-prompt');
   if (el) el.classList.add('hidden');
+}
+
+function showApprovalPrompt(data, jobId) {
+  let el = document.getElementById('input-prompt');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'input-prompt';
+    el.className = 'hidden';
+    el.innerHTML = `<span class="input-label"></span>
+      <div class="input-row" style="gap:12px">
+        <button type="button" class="approve-btn" onclick="sendApproval('${jobId}', 'approve')">✅ Approve & Deploy</button>
+        <button type="button" class="reject-btn" onclick="sendApproval('${jobId}', 'reject')">❌ Reject</button>
+      </div>`;
+    document.getElementById('result-view').appendChild(el);
+  } else {
+    el.querySelector('.input-row').innerHTML =
+      `<button type="button" class="approve-btn" onclick="sendApproval('${jobId}', 'approve')">✅ Approve & Deploy</button>
+       <button type="button" class="reject-btn" onclick="sendApproval('${jobId}', 'reject')">❌ Reject</button>`;
+  }
+  el.querySelector('.input-label').textContent = (data.summary || '').replace(/Reply.*/, '').trim();
+  el.classList.remove('hidden');
+
+  const view = document.getElementById('conversation-view');
+  view.insertAdjacentHTML('beforeend',
+    `<div class="conv-message conv-user" style="border-color:var(--warning)">
+      <div class="conv-role">⚠️ Human approval required</div>
+      <div class="conv-body">${escHtml((data.summary || '').replace(/Reply.*/, '').trim())}</div>
+    </div>`
+  );
+  view.scrollTop = view.scrollHeight;
+}
+
+async function sendApproval(jobId, decision) {
+  const el = document.getElementById('input-prompt');
+  el.querySelectorAll('button').forEach(b => b.disabled = true);
+  try {
+    await api(`/api/jobs/${jobId}/input`, { method: 'POST', body: JSON.stringify({ answer: decision }) });
+  } catch (e) { /* ignore */ }
+  el.classList.add('hidden');
+  // Add decision to conversation
+  const view = document.getElementById('conversation-view');
+  const icon = decision === 'approve' ? '✅ Approved — deploying' : '❌ Rejected';
+  view.insertAdjacentHTML('beforeend',
+    `<div class="conv-message conv-user">
+      <div class="conv-role">You</div>
+      <div class="conv-body">${icon}</div>
+    </div>`
+  );
+  view.scrollTop = view.scrollHeight;
 }
 
 async function submitAnswer(jobId) {

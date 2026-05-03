@@ -157,8 +157,16 @@ def publish_step(step_input: StepInput) -> StepOutput:
                 commit_msg = data.get("commit_message") or "infra: Terraform update"
                 branch = data.get("branch", "main")
                 _run_cmd(["git", "commit", "-m", commit_msg], cwd)
+                commit_id = _run_cmd(["git", "rev-parse", "--short", "HEAD"], cwd)
                 _run_cmd(["git", "push", "-u", "origin", branch], cwd)
                 logs.append(f"Git: committed and pushed to {branch}")
+                from app.job_manager import emit_event
+                emit_event(data.get("job_id", ""), "commit", {
+                    "hash": commit_id,
+                    "message": commit_msg,
+                    "branch": branch,
+                    "url": f"{data.get('remote_url', '').rstrip('.git')}/commit/{commit_id}",
+                })
             else:
                 logs.append("Git: no changes to commit")
         except RuntimeError as e:
@@ -382,6 +390,7 @@ def run(
         )
 
     additional_data = {
+        "job_id": job_id or "",
         "remote_url": config.git_remote_url,
         "branch": config.git_branch,
         "commit_message": commit_message or prompt,
@@ -454,20 +463,52 @@ def run(
 
     emit_event(job_id, "step_done", {"label": "Terraform generation"})
 
-    # Step 3: Publish (git push + Jenkins)
-    step3_log = ""
-    if not skip_git or not skip_jenkins:
-        emit_event(job_id, "step", {"label": "Publishing (git + Jenkins)"})
-        try:
-            step3_result = publish_step(StepInput(
-                input=enriched,
-                additional_data=additional_data,
-            ))
-            step3_log = step3_result.content
-            emit_event(job_id, "step_done", {"label": "Publish", "detail": step3_log[:100]})
-        except Exception as e:
-            step3_log = f"Publish error: {e}"
-            emit_event(job_id, "step_error", {"label": "Publish", "error": str(e)})
+    # Approval gate: pause and ask for human review before publishing
+    if not skip_git and not skip_jenkins:
+        user_approved = True  # default: approve when nothing to publish
+        if config.git_remote_url or config.jenkins_url:
+            files = []
+            if os.path.isdir(REPO_DIR):
+                files = sorted(
+                    os.path.join(REPO_DIR, f)
+                    for f in os.listdir(REPO_DIR)
+                    if f.endswith(".tf")
+                )
+            approval_msg = (
+                f"The agent has generated {len(files)} Terraform file(s):\n"
+                + "\n".join(f"  • {f}" for f in files)
+                + f"\n\nThis will be committed to {config.git_remote_url or '(no git remote)'}"
+                + (f" and applied by Jenkins job '{config.jenkins_job_name}'" if config.jenkins_url else "")
+                + "\n\nReply with: approve  or  reject"
+            )
+            emit_event(job_id, "approval_required", {
+                "summary": approval_msg,
+                "files": files,
+            })
+            from app.job_manager import get_manager as get_jm2
+            answer = get_jm2().pause_for_input(job_id or "", approval_msg)
+            user_approved = "approve" in answer.lower() and "reject" not in answer.lower()
+            if user_approved:
+                emit_event(job_id, "step", {"label": "Approved — Publishing"})
+            else:
+                emit_event(job_id, "step_error", {"label": "Rejected by user", "error": "User rejected the changes"})
+                step3_log = "Rejected by user"
+
+    # Step 3: Publish (git push + Jenkins) — only if approved
+    if user_approved:
+        step3_log = ""
+        if not skip_git or not skip_jenkins:
+            emit_event(job_id, "step", {"label": "Publishing (git + Jenkins)"})
+            try:
+                step3_result = publish_step(StepInput(
+                    input=enriched,
+                    additional_data=additional_data,
+                ))
+                step3_log = step3_result.content
+                emit_event(job_id, "step_done", {"label": "Publish", "detail": step3_log[:100]})
+            except Exception as e:
+                step3_log = f"Publish error: {e}"
+                emit_event(job_id, "step_error", {"label": "Publish", "error": str(e)})
 
     emit_event(job_id, "complete", {})
 
