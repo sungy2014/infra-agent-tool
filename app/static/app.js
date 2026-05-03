@@ -147,12 +147,25 @@ function handleEvent(jobId, ev) {
     showApprovalPrompt(ev.data, jobId);
   } else if (ev.type === 'commit') {
     const d = ev.data || {};
-    const link = d.url ? `<a href="${escHtml(d.url)}" target="_blank" style="color:var(--accent);text-decoration:none">${escHtml(d.hash)}</a>` : escHtml(d.hash || '');
+    const link = d.url ? \`<a href="${escHtml(d.url)}" target="_blank" style="color:var(--accent);text-decoration:none">${escHtml(d.hash)}</a>\` : escHtml(d.hash || '');
     view.insertAdjacentHTML('beforeend',
-      `<div class="conv-message conv-tool">
+      \`<div class="conv-message conv-tool">
         <div class="conv-role">Git commit</div>
         <div class="conv-body">📝 ${escHtml(d.message || '')}<br>🔗 ${link} on <strong>${escHtml(d.branch || '')}</strong></div>
-      </div>`
+      </div>\`
+    );
+    view.scrollTop = view.scrollHeight;
+  } else if (ev.type === 'jenkins_build') {
+    const d = ev.data || {};
+    const icon = d.result === 'SUCCESS' ? '✅' : '❌';
+    const consoleText = d.console ? \`<details class="thinking-block"><summary>📋 console output</summary><pre style="font-size:11px;white-space:pre-wrap;margin-top:4px">${escHtml(d.console)}</pre></details>\` : '';
+    view.insertAdjacentHTML('beforeend',
+      \`<div class="conv-message conv-tool" style="border-color:${d.result === 'SUCCESS' ? 'var(--success)' : 'var(--danger)'}">
+        <div class="conv-role">Jenkins build</div>
+        <div class="conv-body">${icon} Build #${escHtml(d.build_number || '?')}: <strong>${escHtml(d.result || 'UNKNOWN')}</strong>\` +
+        (d.url ? \` <a href="${escHtml(d.url)}" target="_blank" style="color:var(--accent);font-size:12px">open ↗</a>\` : '') +
+        \`</div>${consoleText}
+      </div>\`
     );
     view.scrollTop = view.scrollHeight;
   } else if (ev.type === 'complete') {

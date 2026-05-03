@@ -176,26 +176,83 @@ def publish_step(step_input: StepInput) -> StepOutput:
 
     _check_cancelled()
 
-    # Jenkins trigger
+    # Jenkins trigger + track
     if data.get("skip_jenkins"):
         logs.append("Jenkins: skipped")
     elif data.get("jenkins_url"):
-        import requests
+        import requests, time
         from requests.auth import HTTPBasicAuth
 
-        job_url = f"{data['jenkins_url'].rstrip('/')}/job/{data['jenkins_job_name']}/buildWithParameters"
         auth = HTTPBasicAuth(data.get("jenkins_user", ""), data.get("jenkins_api_token", ""))
-        jenkins_params = data.get("jenkins_parameters")
+        base = data["jenkins_url"].rstrip("/")
+        job_name = data["jenkins_job_name"]
+        job_url = f"{base}/job/{job_name}/buildWithParameters"
 
         try:
-            resp = requests.post(job_url, auth=auth, timeout=30, params=jenkins_params)
-            if resp.status_code == 201:
-                location = resp.headers.get("Location", "unknown")
-                logs.append(f"Jenkins: triggered, queue: {location}")
-            else:
+            # 1. Trigger
+            resp = requests.post(job_url, auth=auth, timeout=30, params=data.get("jenkins_parameters"))
+            if resp.status_code != 201:
                 logs.append(f"Jenkins error: HTTP {resp.status_code}")
+                raise RuntimeError(f"Jenkins trigger failed: {resp.status_code}")
+
+            # 2. Parse queue location to get build number
+            queue_url = resp.headers.get("Location", "")
+            build_number = None
+            for _ in range(30):  # wait up to 30s for queue
+                _check_cancelled()
+                q_resp = requests.get(f"{queue_url}api/json", auth=auth, timeout=10)
+                if q_resp.status_code == 200:
+                    q_data = q_resp.json()
+                    executable = q_data.get("executable")
+                    if executable:
+                        build_number = executable.get("number")
+                        break
+                time.sleep(1)
+
+            if not build_number:
+                logs.append("Jenkins: triggered but build not found in queue")
+                raise RuntimeError("Build was not assigned from queue")
+
+            logs.append(f"Jenkins: build #{build_number} started")
+
+            # 3. Poll build status
+            build_url = f"{base}/job/{job_name}/{build_number}"
+            result = None
+            for _ in range(120):  # wait up to 120s
+                _check_cancelled()
+                b_resp = requests.get(f"{build_url}/api/json", auth=auth, timeout=10)
+                if b_resp.status_code == 200:
+                    b_data = b_resp.json()
+                    if b_data.get("building") is False:
+                        result = b_data.get("result")
+                        break
+                time.sleep(1)
+
+            # 4. Fetch console output (last 80 lines)
+            console = ""
+            try:
+                c_resp = requests.get(f"{build_url}/consoleText", auth=auth, timeout=15)
+                if c_resp.status_code == 200:
+                    lines = c_resp.text.strip().split("\n")
+                    console = "\n".join(lines[-80:])
+            except Exception:
+                console = "(console fetch failed)"
+
+            status = "SUCCESS" if result == "SUCCESS" else f"FAILED ({result})"
+            logs.append(f"Jenkins: build #{build_number} {status}")
+
+            from app.job_manager import emit_event
+            emit_event(data.get("job_id", ""), "jenkins_build", {
+                "build_number": build_number,
+                "result": result or "UNKNOWN",
+                "console": console[:2000],
+                "url": build_url,
+            })
         except Exception as e:
             logs.append(f"Jenkins error: {e}")
+            emit_event(data.get("job_id", ""), "message", {
+                "role": "system", "content": f"Jenkins error: {e}"
+            })
     else:
         logs.append("Jenkins: no URL configured, skipped")
 
