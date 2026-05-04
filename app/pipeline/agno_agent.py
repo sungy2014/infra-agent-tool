@@ -97,14 +97,16 @@ def _check_cancelled():
             raise RuntimeError("Job was cancelled")
 
 
-def clone_repo_step(step_input: StepInput) -> StepOutput:
+def clone_repo_step(step_input: StepInput, run_context=None) -> StepOutput:
     """Step 1: Clone or pull the target GitHub repository."""
     _check_cancelled()
+    # Read config from session_state (persisted, survives Step wrappers) with additional_data fallback
+    state = (getattr(run_context, "session_state", None) or {} if run_context else {})
     data = step_input.additional_data or {}
-    remote_url = data.get("remote_url", "")
-    branch = data.get("branch", "main")
-
-    if data.get("skip_git"):
+    remote_url = state.get("remote_url") or data.get("remote_url", "")
+    branch = state.get("branch") or data.get("branch", "main")
+    skip_git = state.get("skip_git") or data.get("skip_git")
+    if skip_git:
         return StepOutput(content="Git: skipped")
     if not remote_url:
         return StepOutput(content="No remote URL provided, skipping clone.")
