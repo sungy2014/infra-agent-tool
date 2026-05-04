@@ -15,6 +15,7 @@ class Config:
     llm_base_url: str = field(default_factory=lambda: os.getenv("LLM_BASE_URL", ""))
     llm_reasoning_effort: str = field(default_factory=lambda: os.getenv("LLM_REASONING_EFFORT", ""))
     deepseek_thinking: str = field(default_factory=lambda: os.getenv("DEEPSEEK_THINKING", "disabled"))
+    agno_reasoning: bool = field(default_factory=lambda: os.getenv("AGNO_REASONING", "false").lower() == "true")
 
     auth_enabled: bool = field(default_factory=lambda: os.getenv("AUTH_ENABLED", "false").lower() == "true")
     auth_username: str = field(default_factory=lambda: os.getenv("AUTH_USERNAME", "admin"))

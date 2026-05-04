@@ -336,13 +336,13 @@ def _build_model(config: Config) -> OpenAIChat:
 
 def _build_terraform_agent(config: Config) -> Agent:
     model = _build_model(config)
-    return Agent(
-        name="Terraform Generator",
-        model=model,
-        tools=[ask_user, write_terraform_file],
-        db=_build_db(),
-        system_message_role="system",
-        system_message=f"""You are a Terraform infrastructure engineer.
+    kwargs = {
+        "name": "Terraform Generator",
+        "model": model,
+        "tools": [ask_user, write_terraform_file],
+        "db": _build_db(),
+        "system_message_role": "system",
+        "system_message": f"""You are a Terraform infrastructure engineer.
 
 Generate production-quality Terraform code based on the user's request and write it using write_terraform_file.
 
@@ -359,10 +359,15 @@ Use sensible defaults. Only call ask_user if the request is truly ambiguous.
 Clone, git, and Jenkins are handled by the pipeline — do NOT ask about them.
 
 {_load_skills()}""",
-        markdown=True,
-        add_history_to_context=True,
-        num_history_runs=1,
-    )
+        "markdown": True,
+        "add_history_to_context": True,
+        "num_history_runs": 1,
+    }
+    if config.agno_reasoning:
+        kwargs["reasoning"] = True
+        kwargs["reasoning_min_steps"] = 2
+        kwargs["reasoning_max_steps"] = 8
+    return Agent(**kwargs)
 
 
 def _build_db():
