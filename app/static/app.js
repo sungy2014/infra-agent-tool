@@ -127,6 +127,7 @@ function selectJob(jobId) {
   _detailsRendered = false;
   eventCount = 0;
   currentJobId = jobId;
+  showTab('generate'); // Ensure Generate tab is visible
   // Find job in cached _allJobs for immediate status
   const cached = _allJobs.find(j => j.job_id === jobId);
   document.getElementById('form-view').classList.add('hidden');
@@ -174,30 +175,14 @@ function connectEvents(jobId) {
   };
 }
 
-function updatePipeline(stepName, state) {
-  const map = { 'clone': /clone/i, 'generate': /generat|terraform/i, 'publish': /publish|jenkins/i };
-  let pipeKey = '';
-  for (const [k, re] of Object.entries(map)) { if (re.test(stepName)) { pipeKey = k; break; } }
-  if (!pipeKey) return;
-  const node = document.querySelector(`[data-pipe="${pipeKey}"]`);
-  if (!node) return;
-  const dot = node.querySelector('.pipe-dot');
-  node.classList.add('active');
-  if (state === 'done' || state === 'running') {
-    const prev = node.previousElementSibling;
-    if (prev && prev.classList.contains('pipe-connector')) prev.classList.add(state === 'done' ? 'done' : 'active');
-  }
-  dot.className = 'pipe-dot ' + (state === 'running' ? 'running' : state === 'done' ? 'done' : state === 'error' ? 'fail' : '');
-}
-
 function handleEvent(jobId, ev) {
   eventCount++;
   const view = document.getElementById('conversation-view');
   if (eventCount === 1) hideTypingIndicator();
   if (ev.type === 'message') { appendMessage(ev.data, view); }
-  else if (ev.type === 'step') { updatePipeline(ev.data.label, 'running'); appendStep(ev.data.label, 'running', view); }
-  else if (ev.type === 'step_done') { updatePipeline(ev.data.label, 'done'); appendStep(ev.data.label, 'done', view); }
-  else if (ev.type === 'step_error') { updatePipeline(ev.data.label, 'error'); appendStep(ev.data.label, 'error', view); }
+  else   if (ev.type === 'step') { appendStep(ev.data.label, 'running', view); }
+  else if (ev.type === 'step_done') { appendStep(ev.data.label, 'done', view); }
+  else if (ev.type === 'step_error') { appendStep(ev.data.label, 'error', view); }
   else if (ev.type === 'awaiting_input') { showInputPrompt(ev.data.question); }
   else if (ev.type === 'approval_required') { showApprovalPrompt(ev.data, jobId); }
   else if (ev.type === 'commit') {
@@ -394,13 +379,6 @@ function renderFullDetails(job) {
     convLog.forEach(d => appendMessage(d, view));
   }
 
-  // Pipeline nodes
-  document.querySelectorAll('.pipe-node').forEach(node => {
-    const dot = node.querySelector('.pipe-dot');
-    if (!dot.classList.contains('done') && !dot.classList.contains('fail')) { dot.className = 'pipe-dot done'; node.classList.add('active'); }
-    const prev = node.previousElementSibling;
-    if (prev && prev.classList.contains('pipe-connector') && !prev.classList.contains('done')) prev.classList.add('done');
-  });
   view.querySelectorAll('.conv-step').forEach(step => {
     const dot = step.querySelector('.step-dot'), span = step.querySelector('span'), text = span ? span.textContent : '';
     if (text.startsWith('✅') || text.startsWith('❌')) return;
@@ -439,8 +417,6 @@ async function submitJob() {
 function resetForm() {
   if (eventSource) { eventSource.close(); eventSource = null; }
   _detailsRendered = false; stopElapsedTimer(); removeInputPrompt();
-  document.querySelectorAll('.pipe-node').forEach(n => { n.classList.remove('active'); n.querySelector('.pipe-dot').className = 'pipe-dot'; });
-  document.querySelectorAll('.pipe-connector').forEach(c => c.className = 'pipe-connector');
   currentJobId = null;
   document.getElementById('form-view').classList.remove('hidden');
   document.getElementById('result-view').classList.add('hidden');
