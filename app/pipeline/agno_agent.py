@@ -101,7 +101,7 @@ def _check_cancelled():
 def clone_repo_step(step_input: StepInput) -> StepOutput:
     """Step 1: Clone or pull the target GitHub repository."""
     _check_cancelled()
-    data = step_input.additional_data
+    data = step_input.additional_data or {}
     remote_url = data.get("remote_url", "")
     branch = data.get("branch", "main")
 
@@ -147,7 +147,7 @@ def clone_repo_step(step_input: StepInput) -> StepOutput:
 def publish_step(step_input: StepInput) -> StepOutput:
     """Step 3: Commit, push to GitHub, and trigger Jenkins."""
     _check_cancelled()
-    data = step_input.additional_data
+    data = step_input.additional_data or {}
     logs = []
 
     # Git commit and push
