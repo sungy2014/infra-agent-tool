@@ -114,25 +114,31 @@ def clone_repo_step(step_input: StepInput) -> StepOutput:
     os.makedirs(cwd, exist_ok=True)
     git_dir = os.path.join(cwd, ".git")
 
-    if os.path.isdir(git_dir):
-        _run_cmd(["git", "checkout", branch], cwd)
-        _check_cancelled()
-        _run_cmd(["git", "pull", "origin", branch], cwd)
-        msg = f"Pulled latest from {remote_url}/{branch}"
-    else:
-        # Remove contents (not the dir itself) so we can clone into it.
-        if os.path.isdir(cwd):
-            for entry in os.listdir(cwd):
-                entry_path = os.path.join(cwd, entry)
-                if os.path.isfile(entry_path) or os.path.islink(entry_path):
-                    os.remove(entry_path)
-                elif os.path.isdir(entry_path):
-                    shutil.rmtree(entry_path)
-        _run_cmd(
-            ["git", "clone", "--branch", branch, remote_url, "."],
-            cwd,
-        )
-        msg = f"Cloned {remote_url} (branch: {branch})"
+    try:
+        if os.path.isdir(git_dir):
+            _run_cmd(["git", "checkout", branch], cwd)
+            _check_cancelled()
+            _run_cmd(["git", "pull", "origin", branch], cwd)
+            msg = f"Pulled latest from {remote_url}/{branch}"
+        else:
+            if os.path.isdir(cwd):
+                for entry in os.listdir(cwd):
+                    entry_path = os.path.join(cwd, entry)
+                    if os.path.isfile(entry_path) or os.path.islink(entry_path):
+                        os.remove(entry_path)
+                    elif os.path.isdir(entry_path):
+                        shutil.rmtree(entry_path)
+            _run_cmd(
+                ["git", "clone", "--branch", branch, remote_url, "."],
+                cwd,
+            )
+            msg = f"Cloned {remote_url} (branch: {branch})"
+    except Exception as e:
+        from app.job_manager import emit_event
+        emit_event(data.get("job_id", ""), "message", {
+            "role": "tool", "content": f"❌ Clone error: {e}"
+        })
+        raise
 
     _check_cancelled()
     return StepOutput(content=msg)
@@ -171,6 +177,10 @@ def publish_step(step_input: StepInput) -> StepOutput:
                 logs.append("Git: no changes to commit")
         except RuntimeError as e:
             logs.append(f"Git error: {e}")
+            from app.job_manager import emit_event
+            emit_event(data.get("job_id", ""), "message", {
+                "role": "tool", "content": f"❌ Git error: {e}"
+            })
     else:
         logs.append("Git: no remote URL configured, skipped")
 
@@ -313,6 +323,8 @@ def _build_model(config: Config) -> OpenAIChat:
         kwargs["base_url"] = config.llm_base_url
     elif config.llm_provider == "deepseek":
         kwargs["base_url"] = "https://api.deepseek.com"
+    # Apply timeout to all model calls (prevents indefinite hangs)
+    kwargs["timeout"] = 180
     return OpenAIChat(**kwargs)
 
 

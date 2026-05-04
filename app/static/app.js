@@ -57,7 +57,7 @@ function updateStats() {
 
 function renderSidebar() {
   const list = document.getElementById('job-list');
-  const jobs = _allJobs.sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 20);
+  const jobs = _allJobs.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')).slice(0, 20);
   if (!jobs.length) { list.innerHTML = '<div class="empty-state">No jobs yet</div>'; return; }
   list.innerHTML = jobs.map(j => {
       const label = j.pending_question ? '❓ ' + j.pending_question.split('\n')[0].slice(0, 40)
@@ -77,7 +77,7 @@ function renderHistory() {
   const container = document.getElementById('history-table');
   const search = (document.getElementById('history-search').value || '').toLowerCase();
   const filter = document.getElementById('history-filter').value;
-  let jobs = _allJobs.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  let jobs = _allJobs.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
   if (filter) jobs = jobs.filter(j => j.status === filter);
   if (search) jobs = jobs.filter(j =>
     (j.job_id || '').toLowerCase().includes(search) ||
@@ -131,13 +131,29 @@ function selectJob(jobId) {
   document.getElementById('result-view').classList.remove('hidden');
   document.getElementById('job-id-display').textContent = jobId.slice(0, 8);
   removeInputPrompt();
-  startElapsedTimer();
   document.getElementById('cancel-btn').classList.remove('hidden');
   document.getElementById('conversation-view').innerHTML =
-    `<div class="conv-status"><span class="badge queued">queued</span></div>
-     <div class="typing-indicator"><span></span><span></span><span></span><span class="typing-label">Starting...</span></div>
-     <div class="conv-divider">Steps</div>`;
-  connectEvents(jobId);
+    `<div class="conv-status"><span class="badge queued">queued</span></div>`;
+
+  // Fetch job to see its current state
+  api(`/api/jobs/${jobId}`).then(job => {
+    const terminal = ['completed', 'failed', 'cancelled'];
+    if (terminal.includes(job.status)) {
+      // Load full result directly, no SSE
+      document.getElementById('cancel-btn').classList.add('hidden');
+      loadFullResult(jobId).then(() => {
+        const el = document.getElementById('job-elapsed');
+        if (el && job.completed_at) el.textContent = timeAgo(job.completed_at) + ' ago';
+      });
+    } else {
+      // Show starting indicator and stream live events
+      document.getElementById('conversation-view').insertAdjacentHTML('beforeend',
+        `<div class="typing-indicator"><span></span><span></span><span></span><span class="typing-label">Starting...</span></div>
+         <div class="conv-divider">Steps</div>`);
+      startElapsedTimer();
+      connectEvents(jobId);
+    }
+  }).catch(() => { connectEvents(jobId); });
 }
 
 function connectEvents(jobId) {
@@ -317,13 +333,41 @@ function startElapsedTimer() {
 }
 function stopElapsedTimer() { if (_elapsedTimer) { clearInterval(_elapsedTimer); _elapsedTimer = null; } document.getElementById('job-elapsed').textContent = ''; }
 
-function loadFullResult(jobId) { api(`/api/jobs/${jobId}`).then(j => renderFullDetails(j)).catch(() => {}); }
+async function loadFullResult(jobId) {
+  const job = await api(`/api/jobs/${jobId}`);
+  
+  // For older completed jobs, try to get the conversation log from the /log endpoint
+  const convLog = (job.result?.conversation_log) || [];
+  if (!convLog.length && (job.result?.files?.length || job.result?.response || job.status === 'failed')) {
+    // Fetch conversation log separately
+    try {
+      const logData = await api(`/api/jobs/${jobId}/log`);
+      if (logData.log && logData.log.length) {
+        if (!job.result) job.result = {};
+        job.result.conversation_log = logData.log;
+      }
+    } catch { /* ignore */ }
+  }
+  
+  renderFullDetails(job);
+  return job;
+}
 
 function renderFullDetails(job) {
   if (_detailsRendered) return; _detailsRendered = true;
   const view = document.getElementById('conversation-view'), r = job.result || {};
   const statusEl = view.querySelector('.conv-status');
   if (statusEl) statusEl.innerHTML = `<span class="badge ${job.status}">${job.status}</span>`;
+
+  // Render conversation log messages for completed jobs
+  const convLog = r.conversation_log || [];
+  if (convLog.length) {
+    // Remove any existing conversation messages that might be from SSE
+    view.querySelectorAll('.conv-message').forEach(el => el.remove());
+    convLog.forEach(d => appendMessage(d, view));
+  }
+
+  // Pipeline nodes
   document.querySelectorAll('.pipe-node').forEach(node => {
     const dot = node.querySelector('.pipe-dot');
     if (!dot.classList.contains('done') && !dot.classList.contains('fail')) { dot.className = 'pipe-dot done'; node.classList.add('active'); }
