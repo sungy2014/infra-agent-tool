@@ -394,6 +394,21 @@ def _make_workflow(config: Config) -> Workflow:
         from app.job_manager import emit_event
         _check_cancelled()
         result = terraform_agent.run(input=si.input)
+
+        # Handle any native agno pauses (requires_user_input, requires_confirmation)
+        while getattr(result, "is_paused", False):
+            job_id = _current_job_id()
+            reqs = getattr(result, "active_requirements", [])
+            for req in reqs:
+                tname = getattr(req, "tool_name", "unknown")
+                emit_event(job_id, "huma_required", {
+                    "tool": tname,
+                    "args": str(getattr(req, "tool_args", {})),
+                })
+            import logging
+            logging.getLogger("infra-agent").warning("agent paused with %d requirements", len(reqs))
+            break  # Don't loop — let the agent complete with requirement rejection
+
         content = result.content if hasattr(result, "content") else str(result)
         # Capture conversation log to shared dict
         job_id = _current_job_id()
