@@ -89,6 +89,8 @@ class JobManager:
         return True
 
     def pause_for_input(self, job_id: str, question: str) -> str:
+        if not job_id:
+            raise RuntimeError("Cannot pause for input: no job_id")
         upsert_job(job_id, status="awaiting_input", pending_question=question)
         emit_event(job_id, "awaiting_input", {"question": question})
         event = threading.Event()
@@ -115,6 +117,7 @@ class JobManager:
         return False
 
     def _run_job(self, job_id: str, func: Callable, **kwargs):
+        kwargs["job_id"] = job_id
         now = datetime.now(timezone.utc).isoformat()
         upsert_job(job_id, status="running", started_at=now)
         try:

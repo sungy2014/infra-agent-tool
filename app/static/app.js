@@ -127,33 +127,33 @@ function selectJob(jobId) {
   _detailsRendered = false;
   eventCount = 0;
   currentJobId = jobId;
+  // Find job in cached _allJobs for immediate status
+  const cached = _allJobs.find(j => j.job_id === jobId);
   document.getElementById('form-view').classList.add('hidden');
   document.getElementById('result-view').classList.remove('hidden');
   document.getElementById('job-id-display').textContent = jobId.slice(0, 8);
   removeInputPrompt();
-  document.getElementById('cancel-btn').classList.remove('hidden');
   document.getElementById('conversation-view').innerHTML =
-    `<div class="conv-status"><span class="badge queued">queued</span></div>`;
+    `<div class="conv-status"><span class="badge ${cached ? cached.status : 'queued'}">${cached ? cached.status : 'queued'}</span></div>`;
 
-  // Fetch job to see its current state
-  api(`/api/jobs/${jobId}`).then(job => {
-    const terminal = ['completed', 'failed', 'cancelled'];
-    if (terminal.includes(job.status)) {
-      // Load full result directly, no SSE
-      document.getElementById('cancel-btn').classList.add('hidden');
-      loadFullResult(jobId).then(() => {
-        const el = document.getElementById('job-elapsed');
-        if (el && job.completed_at) el.textContent = timeAgo(job.completed_at) + ' ago';
-      });
-    } else {
-      // Show starting indicator and stream live events
-      document.getElementById('conversation-view').insertAdjacentHTML('beforeend',
-        `<div class="typing-indicator"><span></span><span></span><span></span><span class="typing-label">Starting...</span></div>
-         <div class="conv-divider">Steps</div>`);
-      startElapsedTimer();
-      connectEvents(jobId);
-    }
-  }).catch(() => { connectEvents(jobId); });
+  const terminal = ['completed', 'failed', 'cancelled'];
+  if (cached && terminal.includes(cached.status)) {
+    document.getElementById('cancel-btn').classList.add('hidden');
+    loadFullResult(jobId).then(() => {
+      const el = document.getElementById('job-elapsed');
+      if (el && cached.completed_at && cached.started_at) {
+        const s = Math.floor((new Date(cached.completed_at) - new Date(cached.started_at)) / 1000);
+        el.textContent = s > 60 ? Math.floor(s/60) + 'm ' + (s%60) + 's' : s + 's';
+      }
+    });
+  } else {
+    document.getElementById('conversation-view').insertAdjacentHTML('beforeend',
+      `<div class="typing-indicator"><span></span><span></span><span></span><span class="typing-label">Starting...</span></div>
+       <div class="conv-divider">Steps</div>`);
+    document.getElementById('cancel-btn').classList.remove('hidden');
+    startElapsedTimer(cached ? cached.started_at : null);
+    connectEvents(jobId);
+  }
 }
 
 function connectEvents(jobId) {
@@ -323,11 +323,12 @@ function showTypingIndicator(text) {
 }
 function hideTypingIndicator() { const existing = document.querySelector('.typing-indicator'); if (existing) existing.remove(); }
 
-function startElapsedTimer() {
+function startElapsedTimer(startedAt) {
   stopElapsedTimer();
-  const el = document.getElementById('job-elapsed'), start = Date.now();
+  const el = document.getElementById('job-elapsed');
+  const startTime = startedAt ? new Date(startedAt).getTime() : Date.now();
   _elapsedTimer = setInterval(() => {
-    const diff = Date.now() - start, s = Math.floor(diff / 1000), m = Math.floor(s / 60);
+    const diff = Date.now() - startTime, s = Math.floor(diff / 1000), m = Math.floor(s / 60);
     el.textContent = m > 0 ? m + 'm ' + (s % 60) + 's elapsed' : s + 's elapsed';
   }, 1000);
 }
@@ -359,6 +360,19 @@ function renderFullDetails(job) {
   const statusEl = view.querySelector('.conv-status');
   if (statusEl) statusEl.innerHTML = `<span class="badge ${job.status}">${job.status}</span>`;
 
+  // Elapsed time display
+  const elapsedEl = document.getElementById('job-elapsed');
+  if (elapsedEl) {
+    if (job.status === 'completed' && job.completed_at && job.started_at) {
+      const start = new Date(job.started_at).getTime();
+      const end = new Date(job.completed_at).getTime();
+      const s = Math.floor((end - start) / 1000);
+      elapsedEl.textContent = s > 60 ? Math.floor(s / 60) + 'm ' + (s % 60) + 's' : s + 's';
+    } else if (job.status !== 'running' && job.status !== 'awaiting_input') {
+      elapsedEl.textContent = '';
+    }
+  }
+
   // Render conversation log messages for completed jobs
   const convLog = r.conversation_log || [];
   if (convLog.length) {
@@ -389,7 +403,13 @@ function renderFullDetails(job) {
 }
 
 async function cancelJob(jobId) { if (!confirm('Cancel?')) return; try { await api(`/api/jobs/${jobId}/cancel`, { method: 'POST' }); } catch (e) { alert('Cancel failed: ' + e.message); } }
-async function transitionJob(jobId, ns) { if (!ns) return; try { await api(`/api/jobs/${jobId}/transition`, { method: 'POST', body: JSON.stringify({ status: ns }) }); } catch (e) { alert('Transition failed: ' + e.message); } }
+async function transitionJob(jobId, ns) { if (!ns) return; try {
+  await api(`/api/jobs/${jobId}/transition`, { method: 'POST', body: JSON.stringify({ status: ns }) });
+  // Refresh the view
+  _detailsRendered = false;
+  api(`/api/jobs/${jobId}`).then(j => renderFullDetails(j)).catch(() => {});
+  loadJobs();
+} catch (e) { alert('Transition failed: ' + e.message); } }
 function logout() { localStorage.removeItem('infra_agent_token'); localStorage.removeItem('infra_agent_user'); window.location.href = '/login'; }
 
 async function submitJob() {
@@ -419,6 +439,6 @@ function resetForm() {
 }
 
 function escHtml(s) { if (!s) return ''; const div = document.createElement('div'); div.textContent = s; return div.innerHTML; }
-function timeAgo(iso) { const diff = Date.now() - new Date(iso).getTime(), s = Math.floor(diff / 1000); if (s < 60) return s + 's ago'; const m = Math.floor(s / 60); if (m < 60) return m + 'm ago'; return Math.floor(m / 60) + 'h ago'; }
+function timeAgo(iso) { if (!iso) return '?'; const d = new Date(iso).getTime(); if (isNaN(d)) return '?'; const diff = Date.now() - d, s = Math.floor(diff / 1000); if (s < 60) return s + 's ago'; const m = Math.floor(s / 60); return m < 60 ? m + 'm ago' : Math.floor(m / 60) + 'h ago'; }
 
 checkServer(); loadJobs(); setInterval(loadJobs, 10000);

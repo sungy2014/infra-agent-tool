@@ -46,20 +46,28 @@ def _run_cmd(cmd: list[str], cwd: str, timeout: int = 120) -> str:
 # Shared tools
 # ---------------------------------------------------------------------------
 
-_job_id_per_thread: dict[int, str] = {}
-
+# ---------------------------------------------------------------------------
+# Shared tools
+# ---------------------------------------------------------------------------
+# Workflow steps
+# ---------------------------------------------------------------------------
 
 def _current_job_id() -> str:
-    return _job_id_per_thread.get(threading.current_thread().ident, "")
+    try:
+        with open("/tmp/current_job_id", "r") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+
+
+def _set_job_id(job_id: str):
+    with open("/tmp/current_job_id", "w") as f:
+        f.write(job_id or "")
 
 
 @tool
 def ask_user(question: str) -> str:
-    """Ask the user for additional information needed to proceed.
-
-    Args:
-        question: The question to ask the user
-    """
+    """Ask the user for additional information needed to proceed."""
     from app.job_manager import get_manager as get_jm
     job_id = _current_job_id()
     answer = get_jm().pause_for_input(job_id, question)
@@ -70,12 +78,7 @@ def ask_user(question: str) -> str:
 
 @tool(show_result=True)
 def write_terraform_file(filename: str, content: str) -> str:
-    """Write a Terraform file into the repo directory.
-
-    Args:
-        filename: The name of the file (e.g. main.tf, network.tf)
-        content: The Terraform HCL content to write
-    """
+    """Write a Terraform file into the repo directory."""
     _ensure_dir(REPO_DIR)
     sanitized = re.sub(r'[^a-zA-Z0-9_.-]', '_', filename)
     if not sanitized.endswith(".tf"):
@@ -85,10 +88,6 @@ def write_terraform_file(filename: str, content: str) -> str:
         f.write(content)
     return f"Written: {filepath}"
 
-
-# ---------------------------------------------------------------------------
-# Workflow steps
-# ---------------------------------------------------------------------------
 
 def _check_cancelled():
     job_id = _current_job_id()
@@ -444,7 +443,7 @@ def run(
     jenkins_parameters: Optional[dict[str, str]] = None,
     skip_git: bool = False, skip_jenkins: bool = False,
 ) -> dict:
-    _job_id_per_thread[threading.current_thread().ident] = job_id or ""
+    _set_job_id(job_id or "")
 
     repo_abs = os.path.abspath(REPO_DIR)
     if os.path.isdir(repo_abs):
