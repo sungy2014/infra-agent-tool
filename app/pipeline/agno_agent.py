@@ -166,7 +166,7 @@ def publish_step(step_input: StepInput) -> StepOutput:
                 _run_cmd(["git", "commit", "-m", commit_msg], cwd)
                 commit_id = _run_cmd(["git", "rev-parse", "--short", "HEAD"], cwd)
                 _run_cmd(["git", "push", "-u", "origin", branch], cwd)
-                logs.append(f"Git: committed and pushed to {branch}")
+                logs.append(f"Git: committed {commit_id} and pushed to {branch}")
                 from app.job_manager import emit_event
                 emit_event(data.get("job_id", ""), "commit", {
                     "hash": commit_id,
@@ -544,6 +544,13 @@ def run(
         for ev in wf_result.events:
             if hasattr(ev, "content") and ev.content:
                 response_parts.append(str(ev.content))
+
+    # Append git commit and Jenkins build info to conversation_log for persistence
+    for part in response_parts:
+        if part.startswith("Git: committed"):
+            conv_log.append({"role": "tool", "content": part})
+        elif part.startswith("Jenkins: build") or part.startswith("Jenkins: triggered"):
+            conv_log.append({"role": "tool", "content": part})
 
     emit_event(job_id, "complete", {})
 

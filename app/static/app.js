@@ -7,6 +7,7 @@ let _detailsRendered = false;
 let _elapsedTimer = null;
 let _currentTab = 'generate';
 let _allJobs = [];
+let _convCache = {};  // per-job conversation cache
 
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...opts.headers };
@@ -123,17 +124,30 @@ function showTab(name) {
 }
 
 function selectJob(jobId) {
-  if (eventSource) { eventSource.close(); eventSource = null; }
+  // Cache current conversation before switching
+  if (currentJobId && currentJobId !== jobId) {
+    const view = document.getElementById('conversation-view');
+    _convCache[currentJobId] = view.innerHTML;
+    if (eventSource) { eventSource.close(); eventSource = null; }
+  }
   _detailsRendered = false;
   eventCount = 0;
   currentJobId = jobId;
-  showTab('generate'); // Ensure Generate tab is visible
-  // Find job in cached _allJobs for immediate status
+  showTab('generate');
   const cached = _allJobs.find(j => j.job_id === jobId);
   document.getElementById('form-view').classList.add('hidden');
   document.getElementById('result-view').classList.remove('hidden');
   document.getElementById('job-id-display').textContent = jobId.slice(0, 8);
   removeInputPrompt();
+
+  // Restore cached conversation if available
+  if (_convCache[jobId] && cached && ['completed','failed','cancelled'].includes(cached.status)) {
+    document.getElementById('conversation-view').innerHTML = _convCache[jobId];
+    document.getElementById('cancel-btn').classList.add('hidden');
+    stopElapsedTimer();
+    return;
+  }
+
   document.getElementById('conversation-view').innerHTML =
     `<div class="conv-status"><span class="badge ${cached ? cached.status : 'queued'}">${cached ? cached.status : 'queued'}</span></div>`;
 
@@ -371,12 +385,14 @@ function renderFullDetails(job) {
     }
   }
 
-  // Render conversation log messages for completed jobs
+  // Render conversation log if view is empty (fresh load or refresh)
+  // SSE-streamed content is preserved — only render when needed
+  const hasMessages = view.querySelector('.conv-message');
   const convLog = r.conversation_log || [];
-  if (convLog.length) {
-    // Remove any existing conversation messages that might be from SSE
-    view.querySelectorAll('.conv-message').forEach(el => el.remove());
+  if (!hasMessages && convLog.length) {
     convLog.forEach(d => appendMessage(d, view));
+  } else if (!hasMessages && !convLog.length) {
+    // No log available — show summary only
   }
 
   view.querySelectorAll('.conv-step').forEach(step => {
@@ -417,6 +433,7 @@ async function submitJob() {
 function resetForm() {
   if (eventSource) { eventSource.close(); eventSource = null; }
   _detailsRendered = false; stopElapsedTimer(); removeInputPrompt();
+  _convCache = {};
   currentJobId = null;
   document.getElementById('form-view').classList.remove('hidden');
   document.getElementById('result-view').classList.add('hidden');
