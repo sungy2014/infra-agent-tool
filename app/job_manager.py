@@ -115,7 +115,6 @@ class JobManager:
         return False
 
     def _run_job(self, job_id: str, func: Callable, **kwargs):
-        kwargs["job_id"] = job_id
         now = datetime.now(timezone.utc).isoformat()
         upsert_job(job_id, status="running", started_at=now)
         try:

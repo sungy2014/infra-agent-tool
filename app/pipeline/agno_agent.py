@@ -111,6 +111,7 @@ def clone_repo_step(step_input: StepInput) -> StepOutput:
         return StepOutput(content="No remote URL provided, skipping clone.")
 
     cwd = os.path.abspath(REPO_DIR)
+    os.makedirs(cwd, exist_ok=True)
     git_dir = os.path.join(cwd, ".git")
 
     if os.path.isdir(git_dir):
@@ -119,8 +120,6 @@ def clone_repo_step(step_input: StepInput) -> StepOutput:
         _run_cmd(["git", "pull", "origin", branch], cwd)
         msg = f"Pulled latest from {remote_url}/{branch}"
     else:
-        # Ensure repo directory exists (may not exist outside Docker)
-        os.makedirs(cwd, exist_ok=True)
         # Remove contents (not the dir itself) so we can clone into it.
         if os.path.isdir(cwd):
             for entry in os.listdir(cwd):
@@ -181,12 +180,12 @@ def publish_step(step_input: StepInput) -> StepOutput:
     if data.get("skip_jenkins"):
         logs.append("Jenkins: skipped")
     elif data.get("jenkins_url"):
-        import requests, time
+        import requests, time, urllib.parse
         from requests.auth import HTTPBasicAuth
 
         auth = HTTPBasicAuth(data.get("jenkins_user", ""), data.get("jenkins_api_token", ""))
         base = data["jenkins_url"].rstrip("/")
-        job_name = data["jenkins_job_name"]
+        job_name = urllib.parse.quote(data["jenkins_job_name"], safe="")
         job_url = f"{base}/job/{job_name}/buildWithParameters"
 
         try:
@@ -372,54 +371,60 @@ _agent_results: dict[str, dict] = {}
 _user_answers: dict[str, list[str]] = {}
 
 
-def _make_terraform_step(config: Config):
-    """Factory: returns a function step that runs the Terraform agent."""
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
-    def terraform_step(step_input: StepInput) -> StepOutput:
+def _make_workflow(config: Config) -> Workflow:
+    """Build an agno Workflow with clone → generate → publish steps."""
+    terraform_agent = _build_terraform_agent(config)
+
+    def _generate_step(si: StepInput) -> StepOutput:
+        from app.job_manager import emit_event
         _check_cancelled()
-        agent = _build_terraform_agent(config)
-        result = agent.run(input=step_input.input)
-
+        result = terraform_agent.run(input=si.input)
+        content = result.content if hasattr(result, "content") else str(result)
+        # Capture conversation log to shared dict
+        job_id = _current_job_id()
         log_entries = []
-        answer_idx = 0
-        user_ans = _user_answers.get(_current_job_id() or "", [])
         try:
-            msgs = getattr(result, "messages", None) or []
-            for m in msgs:
+            for m in (getattr(result, "messages", None) or []):
                 role = getattr(m, "role", "unknown")
-                content = getattr(m, "content", "") or ""
-                tc = getattr(m, "tool_calls", None)
+                text = str(getattr(m, "content", "") or "")[:500]
                 rc = getattr(m, "reasoning_content", None)
-                entry = {"role": role, "content": str(content)[:500]}
-                if rc:
-                    entry["reasoning"] = str(rc)[:300]
+                tc = getattr(m, "tool_calls", None)
+                entry = {"role": role, "content": text}
+                if rc: entry["reasoning"] = str(rc)[:300]
                 if tc:
                     parsed = []
                     for t in tc:
                         fn = t.get("function", {}) if isinstance(t, dict) else getattr(t, "function", {})
-                        name = fn.get("name", "")
-                        if name == "ask_user" and answer_idx < len(user_ans):
-                            entry["user_answer"] = user_ans[answer_idx]
-                            answer_idx += 1
-                        parsed.append({"name": name, "args": str(fn.get("arguments", ""))[:80]})
+                        parsed.append({"name": fn.get("name", ""), "args": str(fn.get("arguments", ""))[:80]})
                     entry["tool_calls"] = parsed
                 log_entries.append(entry)
-        except Exception as exc:
-            log_entries.append({"role": "system", "content": f"log error: {exc}"})
-
-        job_id = _current_job_id()
+                emit_event(job_id, "message", entry)
+        except Exception:
+            pass
         if job_id and log_entries:
-            from app.db import upsert_job
+            _conversation_logs[job_id] = log_entries
             try:
+                from app.db import upsert_job
                 upsert_job(job_id, log=json.dumps(log_entries))
-                _conversation_logs[job_id] = log_entries
             except Exception:
                 pass
+        return StepOutput(content=content)
 
+    return Workflow(
+        name="Infra Pipeline",
+        description="Clone → Generate Terraform → Publish & Jenkins",
+        db=_build_db(),
+        steps=[
+            clone_repo_step,
+            _generate_step,
+            publish_step,
+        ],
+    )
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def run(
     config: Config, prompt: str, job_id: Optional[str] = None,
@@ -438,7 +443,6 @@ def run(
             elif os.path.isdir(entry_path) and entry != ".git":
                 shutil.rmtree(entry_path)
 
-    # Enrich the prompt with environment configuration
     enriched = prompt
     if config.git_remote_url:
         enriched += f"\n\nGit repository URL: {config.git_remote_url}\nGit branch: {config.git_branch}"
@@ -463,125 +467,28 @@ def run(
         "skip_jenkins": skip_jenkins,
     }
 
-    # Check for cancellation before starting
     from app.job_manager import get_manager as get_jm, emit_event
     if get_jm().is_cancelled(job_id or ""):
         return {"response": "Job was cancelled before execution", "repo_dir": REPO_DIR, "files": []}
 
-    emit_event(job_id, "step", {"label": "Cloning repository"})
+    workflow = _make_workflow(config)
+    wf_result = workflow.run(input=enriched, additional_data=additional_data)
 
-    # Step 1: Clone repo
-    step1_log = ""
-    if config.git_remote_url and not skip_git:
-        try:
-            step1_result = clone_repo_step(StepInput(
-                input=enriched,
-                additional_data=additional_data,
-            ))
-            step1_log = step1_result.content
-            emit_event(job_id, "step_done", {"label": "Clone", "detail": step1_log[:100]})
-        except Exception as e:
-            step1_log = f"Clone error: {e}"
-            emit_event(job_id, "step_error", {"label": "Clone", "error": str(e)})
+    conv_log = _conversation_logs.get(job_id or "", [])
+    files = []
+    if os.path.isdir(REPO_DIR):
+        files = sorted(os.path.join(REPO_DIR, f) for f in os.listdir(REPO_DIR) if f.endswith(".tf"))
 
-    emit_event(job_id, "step", {"label": "Generating Terraform code"})
-
-    # Step 2: Run the Terraform agent directly
-    agent = _build_terraform_agent(config)
-    agent_result = agent.run(input=enriched)
-    agent_content = agent_result.content if hasattr(agent_result, "content") else str(agent_result)
-
-    # Capture and emit conversation log at once
-    conv_log = []
-    try:
-        msgs = getattr(agent_result, "messages", None) or []
-        for m in msgs:
-            role = getattr(m, "role", "unknown")
-            content = str(getattr(m, "content", "") or "")[:500]
-            rc = getattr(m, "reasoning_content", None)
-            tc = getattr(m, "tool_calls", None)
-            entry = {"role": role, "content": content}
-            if rc:
-                entry["reasoning"] = str(rc)[:300]
-            if tc:
-                parsed = []
-                for t in tc:
-                    fn = t.get("function", {}) if isinstance(t, dict) else getattr(t, "function", {})
-                    name = fn.get("name", "")
-                    parsed.append({"name": name, "args": str(fn.get("arguments", ""))[:80]})
-                entry["tool_calls"] = parsed
-            conv_log.append(entry)
-            emit_event(job_id, "message", entry)
-        if job_id:
-            from app.db import upsert_job
-            try:
-                upsert_job(job_id, log=json.dumps(conv_log))
-            except Exception:
-                pass
-    except Exception as exc:
-        conv_log.append({"role": "system", "content": f"log error: {exc}"})
-
-    emit_event(job_id, "step_done", {"label": "Terraform generation"})
-
-    # Approval gate: pause and ask for human review before publishing
-    user_approved = True  # default: approve when nothing to publish
-    if not skip_git and not skip_jenkins:
-        if config.git_remote_url or config.jenkins_url:
-            files = []
-            if os.path.isdir(REPO_DIR):
-                files = sorted(
-                    os.path.join(REPO_DIR, f)
-                    for f in os.listdir(REPO_DIR)
-                    if f.endswith(".tf")
-                )
-            approval_msg = (
-                f"The agent has generated {len(files)} Terraform file(s):\n"
-                + "\n".join(f"  • {f}" for f in files)
-                + f"\n\nThis will be committed to {config.git_remote_url or '(no git remote)'}"
-                + (f" and applied by Jenkins job '{config.jenkins_job_name}'" if config.jenkins_url else "")
-                + "\n\nReply with: approve  or  reject"
-            )
-            emit_event(job_id, "approval_required", {
-                "summary": approval_msg,
-                "files": files,
-            })
-            from app.job_manager import get_manager as get_jm2
-            answer = get_jm2().pause_for_input(job_id or "", approval_msg)
-            user_approved = "approve" in answer.lower() and "reject" not in answer.lower()
-            if user_approved:
-                emit_event(job_id, "step", {"label": "Approved — Publishing"})
-            else:
-                emit_event(job_id, "step_error", {"label": "Rejected by user", "error": "User rejected the changes"})
-                step3_log = "Rejected by user"
-
-    # Step 3: Publish (git push + Jenkins) — only if approved
-    if user_approved:
-        step3_log = ""
-        if not skip_git or not skip_jenkins:
-            emit_event(job_id, "step", {"label": "Publishing (git + Jenkins)"})
-            try:
-                step3_result = publish_step(StepInput(
-                    input=enriched,
-                    additional_data=additional_data,
-                ))
-                step3_log = step3_result.content
-                emit_event(job_id, "step_done", {"label": "Publish", "detail": step3_log[:100]})
-            except Exception as e:
-                step3_log = f"Publish error: {e}"
-                emit_event(job_id, "step_error", {"label": "Publish", "error": str(e)})
+    response_parts = []
+    if hasattr(wf_result, "events") and wf_result.events:
+        for ev in wf_result.events:
+            if hasattr(ev, "content") and ev.content:
+                response_parts.append(str(ev.content))
 
     emit_event(job_id, "complete", {})
 
-    files = []
-    if os.path.isdir(REPO_DIR):
-        files = sorted(
-            os.path.join(REPO_DIR, f)
-            for f in os.listdir(REPO_DIR)
-            if f.endswith(".tf")
-        )
-
     return {
-        "response": "\n".join(filter(None, [step1_log, agent_content, step3_log])),
+        "response": "\n".join(filter(None, response_parts)) or (wf_result.content if hasattr(wf_result, "content") else str(wf_result)),
         "repo_dir": REPO_DIR,
         "files": files,
         "conversation_log": conv_log,

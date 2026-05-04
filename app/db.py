@@ -33,7 +33,7 @@ def _init_schema():
             CREATE TABLE IF NOT EXISTS jobs (
                 job_id TEXT PRIMARY KEY,
                 status TEXT NOT NULL DEFAULT 'queued',
-                created_at TEXT NOT NULL,
+                created_at TEXT,
                 started_at TEXT,
                 completed_at TEXT,
                 result TEXT,
@@ -48,6 +48,12 @@ def _init_schema():
         except psycopg2.errors.UndefinedColumn:
             conn.rollback()
             cur.execute("ALTER TABLE jobs ADD COLUMN log TEXT")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        # Migration: allow created_at to be nullable for upsert compatibility
+        try:
+            cur.execute("ALTER TABLE jobs ALTER COLUMN created_at DROP NOT NULL")
             conn.commit()
         except Exception:
             conn.rollback()

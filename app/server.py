@@ -312,7 +312,10 @@ def submit_input(job_id: str, req: InputRequest):
 
 def main():
     host = os.getenv("SERVER_HOST", "0.0.0.0")
-    port = int(os.getenv("SERVER_PORT", "8000"))
+    try:
+        port = int(os.getenv("SERVER_PORT", "8000"))
+    except (ValueError, TypeError):
+        port = 8000
     reload = os.getenv("SERVER_RELOAD", "").lower() == "true"
     log.info("listening on %s:%s auth=%s", host, port, AUTH_ENABLED)
     uvicorn.run("app.server:app", host=host, port=port, reload=reload)
