@@ -429,11 +429,11 @@ def _make_workflow(config: Config, skip_git: bool = False, skip_jenkins: bool = 
         try:
             for m in (getattr(result, "messages", None) or []):
                 role = getattr(m, "role", "unknown")
-                text = str(getattr(m, "content", "") or "")[:500]
+                text = str(getattr(m, "content", "") or "")
                 rc = getattr(m, "reasoning_content", None)
                 tc = getattr(m, "tool_calls", None)
                 entry = {"role": role, "content": text}
-                if rc: entry["reasoning"] = str(rc)[:300]
+                if rc: entry["reasoning"] = str(rc)
                 if tc:
                     parsed = []
                     for t in tc:
