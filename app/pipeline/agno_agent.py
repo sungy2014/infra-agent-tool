@@ -438,12 +438,22 @@ def _make_workflow(config: Config) -> Workflow:
                 upsert_job(job_id, log=json.dumps(log_entries))
             except Exception:
                 pass
+        # Check if agent actually generated files — stop workflow early if not
+        tf_count = 0
+        if os.path.isdir(REPO_DIR):
+            tf_count = sum(1 for f in os.listdir(REPO_DIR) if f.endswith(".tf"))
+        if tf_count == 0:
+            emit_event(_current_job_id(), "message", {"role": "system", "content": "No Terraform files generated — stopping pipeline"})
+            return StepOutput(content=content + "\n[Stopped: no files generated]", stop=True)
+
         return StepOutput(content=content)
 
     return Workflow(
         name="Infra Pipeline",
         description="Clone → Generate Terraform → Publish & Jenkins",
         db=_build_db(),
+        store_events=True,
+        events_to_skip=[],
         steps=[
             clone_repo_step,
             _generate_step,
