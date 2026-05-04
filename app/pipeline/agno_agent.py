@@ -10,8 +10,7 @@ from agno.agent import Agent
 from agno.models.openai import OpenAIChat
 from agno.tools.decorator import tool
 from agno.workflow import Workflow
-from agno.workflow.step import Step
-from agno.workflow.types import StepInput, StepOutput, HumanReview, OnReject
+from agno.workflow.types import StepInput, StepOutput
 
 from app.config import Config
 
@@ -387,21 +386,9 @@ _user_answers: dict[str, list[str]] = {}
 # Public API
 # ---------------------------------------------------------------------------
 
-def _make_workflow(config: Config, skip_git: bool = False, skip_jenkins: bool = False) -> Workflow:
+def _make_workflow(config: Config) -> Workflow:
     """Build an agno Workflow with clone → generate → publish steps."""
     terraform_agent = _build_terraform_agent(config)
-
-    # Only require confirmation if something will actually be published
-    needs_publish = (not skip_git and config.git_remote_url) or (not skip_jenkins and config.jenkins_url)
-    publish_step_conf = Step(
-        name="Publish",
-        executor=publish_step,
-        human_review=HumanReview(
-            requires_confirmation=needs_publish,
-            confirmation_message="Review the Terraform code. Publish to GitHub and trigger Jenkins?",
-            on_reject=OnReject.skip,
-        ),
-    ) if needs_publish else publish_step
 
     def _generate_step(si: StepInput) -> StepOutput:
         from app.job_manager import emit_event
@@ -460,7 +447,7 @@ def _make_workflow(config: Config, skip_git: bool = False, skip_jenkins: bool = 
         steps=[
             clone_repo_step,
             _generate_step,
-            publish_step_conf,
+            publish_step,
         ],
     )
 
@@ -510,7 +497,7 @@ def run(
     if get_jm().is_cancelled(job_id or ""):
         return {"response": "Job was cancelled before execution", "repo_dir": REPO_DIR, "files": []}
 
-    workflow = _make_workflow(config, skip_git=skip_git, skip_jenkins=skip_jenkins)
+    workflow = _make_workflow(config)
     wf_result = workflow.run(input=enriched, additional_data=additional_data)
 
     # Handle workflow-level HITL pauses (e.g., confirmation on publish step)

@@ -234,18 +234,31 @@ function appendMessage(data, view) {
   const role = data.role || 'unknown';
   const msg = escHtml(data.content || '');
   let extra = '';
+  const long = msg.length > 300 && role !== 'tool';
+  const body = long
+    ? `<details class="msg-collapse"><summary>${msg.slice(0, 300)}...</summary><div class="msg-full">${msg}</div></details>`
+    : `<div class="conv-body${role === 'assistant' ? ' conv-assistant-body' : ''}">${msg || '(empty)'}</div>`;
   if (data.reasoning) extra += `<details class="thinking-block"><summary>💭 thinking</summary><div>${escHtml(data.reasoning)}</div></details>`;
   if (data.tool_calls) {
     data.tool_calls.forEach(t => {
-      if (t.name === 'ask_user') extra += `<div class="conv-answer">❓ ${escHtml(t.args || '')}</div>`;
-      else extra += `<div class="conv-toolcall">🔧 ${escHtml(t.name)}(${escHtml((t.args || '').slice(0, 100))})</div>`;
+      if (t.name === 'ask_user') {
+        let q = t.args || '';
+        try { q = JSON.parse(q).question || q; } catch { /* keep as-is */ }
+        extra += `<div class="conv-answer">❓ ${escHtml(q)}</div>`;
+      } else extra += `<div class="conv-toolcall">🔧 ${escHtml(t.name)}(${escHtml((t.args || '').slice(0, 100))})</div>`;
     });
   }
   if (data.user_answer) extra += `<div class="conv-answer">👤 ${escHtml(data.user_answer)}</div>`;
-  const label = role === 'assistant' ? 'Agent' : role === 'user' ? 'You' : role === 'tool' ? 'Tool result' : role === 'system' ? 'System' : role;
+  // For ask_user tool results, show as "You" not "Tool result"
+  const askUserResult = role === 'tool' && !msg.startsWith('Written:') && !msg.startsWith('Written repo');
+  const label = askUserResult ? 'You' :
+                role === 'assistant' ? 'Agent' :
+                role === 'user' ? 'You' :
+                role === 'tool' ? 'Tool result' :
+                role === 'system' ? 'System' : role;
   hideTypingIndicator();
   view.insertAdjacentHTML('beforeend',
-    `<div class="conv-message conv-${role}"><div class="conv-role">${label}</div><div class="conv-body${role === 'assistant' ? ' conv-assistant-body' : ''}">${msg || '(empty)'}</div>${extra}</div>`);
+    `<div class="conv-message conv-${role}"><div class="conv-role">${label}</div>${body}${extra}</div>`);
   view.scrollTop = view.scrollHeight;
 }
 

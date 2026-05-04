@@ -59,6 +59,9 @@ textarea:focus{outline:none;border-color:var(--accent)}
 .conv-role{font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;color:var(--text-muted)}
 .conv-body{white-space:pre-wrap;word-break:break-word}
 .conv-assistant-body{color:var(--text)}
+.msg-collapse summary{cursor:pointer;color:var(--text-muted);font-size:13px;padding:2px 0}
+.msg-collapse summary:hover{color:var(--accent)}
+.msg-collapse .msg-full{margin-top:6px;white-space:pre-wrap;word-break:break-word}
 .thinking-block{margin:6px 0 0 0;font-size:13px}
 .thinking-block summary{color:var(--accent);cursor:pointer;font-size:12px;font-weight:500}
 .thinking-block div{margin-top:4px;padding:8px;background:rgba(0,0,0,.3);border-radius:4px;color:var(--text-muted);font-size:12px;line-height:1.4;white-space:pre-wrap}
