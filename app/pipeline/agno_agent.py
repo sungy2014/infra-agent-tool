@@ -324,6 +324,9 @@ def _build_model(config: Config) -> OpenAIChat:
         kwargs["base_url"] = config.llm_base_url
     elif config.llm_provider == "deepseek":
         kwargs["base_url"] = "https://api.deepseek.com"
+    # Disable thinking mode for DeepSeek (faster responses, configurable)
+    if config.llm_provider == "deepseek" and config.deepseek_thinking == "disabled":
+        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
     # Apply timeout to all model calls (prevents indefinite hangs)
     kwargs["timeout"] = 180
     return OpenAIChat(**kwargs)
@@ -337,32 +340,21 @@ def _build_terraform_agent(config: Config) -> Agent:
         tools=[ask_user, write_terraform_file],
         db=_build_db(),
         system_message_role="system",
-        system_message=f"""You are a senior infrastructure engineer specializing in Terraform.
+        system_message=f"""You are a Terraform infrastructure engineer.
 
-You are given a complete infrastructure request. Generate and write the Terraform code immediately.
-
-Your job is ONLY to:
-1. Parse the user's request
-2. Generate Terraform code using sensible defaults for anything not specified
-3. Write files using write_terraform_file
-
-Do NOT ask the user for missing details — use defaults:
-- Region: us-east-1
-- Environment: production  
-- Tags: Name, Environment, ManagedBy
-
-Do NOT ask about GitHub URLs or Jenkins — those are handled by other steps.
+Generate production-quality Terraform code based on the user's request and write it using write_terraform_file.
 
 Rules:
-- Use Terraform >= 1.5 syntax with `required_providers` blocks
-- Write provider config, variables, resources, and outputs using write_terraform_file
 - One file per concern: provider.tf, variables.tf, <resource>.tf, outputs.tf
-- Use variables for things that should be configurable
-- Default to AWS provider ~> 5.0
-- Include security best practices: encryption, public access blocks
-- NEVER use placeholder values like "CHANGEME"
+- Use Terraform >= 1.5 with `required_providers` blocks
+- Default region: us-east-1, provider: AWS ~> 5.0
+- Include security defaults: encryption, public access blocks
+- Tag resources: Name, Environment, ManagedBy
+- Use variables for configurable values
+- Never use placeholder values
 
-Only call ask_user if the user's request is truly ambiguous (e.g. they ask "create something" without specifying any resource type).
+Use sensible defaults. Only call ask_user if the request is truly ambiguous.
+Clone, git, and Jenkins are handled by the pipeline — do NOT ask about them.
 
 {_load_skills()}""",
         markdown=True,
@@ -427,7 +419,7 @@ def _make_workflow(config: Config) -> Workflow:
                     parsed = []
                     for t in tc:
                         fn = t.get("function", {}) if isinstance(t, dict) else getattr(t, "function", {})
-                        parsed.append({"name": fn.get("name", ""), "args": str(fn.get("arguments", ""))[:80]})
+                        parsed.append({"name": fn.get("name", ""), "args": str(fn.get("arguments", ""))})
                     entry["tool_calls"] = parsed
                 log_entries.append(entry)
                 emit_event(job_id, "message", entry)

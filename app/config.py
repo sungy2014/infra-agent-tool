@@ -14,6 +14,7 @@ class Config:
     llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "gpt-4o"))
     llm_base_url: str = field(default_factory=lambda: os.getenv("LLM_BASE_URL", ""))
     llm_reasoning_effort: str = field(default_factory=lambda: os.getenv("LLM_REASONING_EFFORT", ""))
+    deepseek_thinking: str = field(default_factory=lambda: os.getenv("DEEPSEEK_THINKING", "disabled"))
 
     auth_enabled: bool = field(default_factory=lambda: os.getenv("AUTH_ENABLED", "false").lower() == "true")
     auth_username: str = field(default_factory=lambda: os.getenv("AUTH_USERNAME", "admin"))
