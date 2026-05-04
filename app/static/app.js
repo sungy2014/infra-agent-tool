@@ -294,7 +294,8 @@ async function submitAnswer(jobId) {
   const el = document.getElementById('input-prompt'); if (!el) return;
   const input = el.querySelector('input'), answer = input.value.trim(); if (!answer) return;
   input.disabled = true;
-  try { await api(`/api/jobs/${jobId}/input`, { method: 'POST', body: JSON.stringify({ answer }) }); } catch (e) { /* ignore */ }
+  try { await api(`/api/jobs/${jobId}/input`, { method: 'POST', body: JSON.stringify({ answer }) }); }
+  catch (e) { input.disabled = false; el.querySelector('.input-label').textContent = 'Failed to send — ' + e.message; return; }
   const view = document.getElementById('conversation-view');
   view.insertAdjacentHTML('beforeend', `<div class="conv-message conv-user"><div class="conv-role">You</div><div class="conv-body">${escHtml(answer)}</div></div>`);
   view.scrollTop = view.scrollHeight; el.classList.add('hidden');

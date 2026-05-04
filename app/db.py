@@ -45,10 +45,12 @@ def _init_schema():
         # Migration: add log column if table already existed without it
         try:
             cur.execute("SELECT log FROM jobs LIMIT 1")
-        except Exception:
+        except psycopg2.errors.UndefinedColumn:
             conn.rollback()
             cur.execute("ALTER TABLE jobs ADD COLUMN log TEXT")
             conn.commit()
+        except Exception:
+            conn.rollback()
 
 
 def load_job(job_id: str) -> Optional[dict]:
@@ -70,20 +72,16 @@ def list_jobs(limit: int = 50) -> list[dict]:
 
 def upsert_job(job_id: str, **fields):
     conn = _get_conn()
-    existing = load_job(job_id)
+    keys = ["job_id"] + list(fields.keys())
+    set_clause = ", ".join(f"{k} = EXCLUDED.{k}" for k in fields)
+    placeholders = ", ".join("%s" for _ in keys)
+    values = [job_id] + list(fields.values())
     with conn.cursor() as cur:
-        if existing:
-            set_clause = ", ".join(f"{k} = %s" for k in fields)
-            values = list(fields.values()) + [job_id]
-            cur.execute(f"UPDATE jobs SET {set_clause} WHERE job_id = %s", values)
-        else:
-            keys = ["job_id"] + list(fields.keys())
-            placeholders = ", ".join("%s" for _ in keys)
-            values = [job_id] + list(fields.values())
-            cur.execute(
-                f"INSERT INTO jobs ({', '.join(keys)}) VALUES ({placeholders})",
-                values,
-            )
+        cur.execute(
+            f"INSERT INTO jobs ({', '.join(keys)}) VALUES ({placeholders}) "
+            f"ON CONFLICT (job_id) DO UPDATE SET {set_clause}",
+            values,
+        )
 
 
 def delete_old_jobs(keep_days: int = 7):

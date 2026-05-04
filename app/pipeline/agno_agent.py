@@ -119,8 +119,9 @@ def clone_repo_step(step_input: StepInput) -> StepOutput:
         _run_cmd(["git", "pull", "origin", branch], cwd)
         msg = f"Pulled latest from {remote_url}/{branch}"
     else:
+        # Ensure repo directory exists (may not exist outside Docker)
+        os.makedirs(cwd, exist_ok=True)
         # Remove contents (not the dir itself) so we can clone into it.
-        # The parent may be root-owned in Docker, so avoid shutil.rmtree(cwd).
         if os.path.isdir(cwd):
             for entry in os.listdir(cwd):
                 entry_path = os.path.join(cwd, entry)
@@ -284,6 +285,8 @@ def _load_skill(name: str) -> str:
 
 
 def _load_skills() -> str:
+    if not os.path.isdir(SKILLS_DIR):
+        return ""
     parts = []
     for skill_name in sorted(os.listdir(SKILLS_DIR)):
         if skill_name.startswith(".") or not os.path.isdir(os.path.join(SKILLS_DIR, skill_name)):
@@ -521,8 +524,8 @@ def run(
     emit_event(job_id, "step_done", {"label": "Terraform generation"})
 
     # Approval gate: pause and ask for human review before publishing
+    user_approved = True  # default: approve when nothing to publish
     if not skip_git and not skip_jenkins:
-        user_approved = True  # default: approve when nothing to publish
         if config.git_remote_url or config.jenkins_url:
             files = []
             if os.path.isdir(REPO_DIR):

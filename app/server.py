@@ -82,8 +82,13 @@ async def auth_middleware(request: Request, call_next):
     if not AUTH_ENABLED:
         return await call_next(request)
 
-    public_paths = {"/login", "/api/auth/login", "/health", "/static/login.html", "/static/style.css"}
-    if request.url.path in public_paths or request.url.path.startswith("/static/"):
+    if request.url.path in ("/login", "/health") or request.url.path.startswith("/static/"):
+        return await call_next(request)
+    if request.url.path == "/api/auth/login":
+        return await call_next(request)
+
+    # Allow SPA to load — auth is enforced by frontend redirect + API 401
+    if request.url.path == "/":
         return await call_next(request)
 
     auth_header = request.headers.get("Authorization", "")
@@ -91,9 +96,6 @@ async def auth_middleware(request: Request, call_next):
         username = verify_token(auth_header[7:])
         if username:
             return await call_next(request)
-
-    if request.url.path == "/":
-        return RedirectResponse(url="/login")
 
     raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -119,7 +121,8 @@ def login(req: LoginRequest):
 def login_page():
     path = os.path.join(static_dir, "login.html")
     if os.path.isfile(path):
-        return HTMLResponse(open(path).read())
+        with open(path) as f:
+            return HTMLResponse(f.read())
     return HTMLResponse("<h1>Login page not found</h1>", status_code=404)
 
 
@@ -127,10 +130,11 @@ def login_page():
 
 @app.get("/")
 def index():
-    html = open(os.path.join(static_dir, "index.html")).read()
+    with open(os.path.join(static_dir, "index.html")) as f:
+        html = f.read()
     if AUTH_ENABLED:
-        # Inject auth config — frontend will redirect to /login if no token
-        pass
+        auth_check = '<script>if(!localStorage.getItem("infra_agent_token")){window.location.href="/login"}</script>'
+        html = html.replace("</head>", auth_check + "</head>")
     return HTMLResponse(html)
 
 
