@@ -297,9 +297,11 @@ def _load_skill(name: str) -> str:
 def _load_skills() -> str:
     if not os.path.isdir(SKILLS_DIR):
         return ""
+    # Only load skills relevant to the agent (clone/git/jenkins handled by Workflow)
+    relevant = ["generate-terraform"]
     parts = []
-    for skill_name in sorted(os.listdir(SKILLS_DIR)):
-        if skill_name.startswith(".") or not os.path.isdir(os.path.join(SKILLS_DIR, skill_name)):
+    for skill_name in relevant:
+        if not os.path.isdir(os.path.join(SKILLS_DIR, skill_name)):
             continue
         body = _load_skill(skill_name)
         if body:
